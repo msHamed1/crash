@@ -1,0 +1,48 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: crash-mysql
+    environment:
+      MYSQL_DATABASE: crash_game
+      MYSQL_USER: crash
+      MYSQL_PASSWORD: crash_password
+      MYSQL_ROOT_PASSWORD: root_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -ucrash -pcrash_password --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  rng-service:
+    build:
+      context: .
+      dockerfile: src/RngService/Dockerfile
+    container_name: crash-rng-service
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      MySql__ConnectionString: Server=mysql;Port=3306;Database=crash_game;User=crash;Password=crash_password;
+    ports:
+      - "5001:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  game-engine:
+    build:
+      context: .
+      dockerfile: src/GameEngine/Dockerfile
+    container_name: crash-game-engine
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      Services__Rng__Address: http://rng-service:8080
+    ports:
+      - "5002:8080"
+    depends_on:
+      - rng-service
+
+volumes:
+  mysql-data:

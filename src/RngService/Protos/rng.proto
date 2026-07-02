@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+option csharp_namespace = "Crash.Rng";
+
+package crash.rng;
+
+service Rng {
+  rpc GenerateRoundEntropy (GenerateRoundEntropyRequest) returns (GenerateRoundEntropyResponse);
+}
+
+message GenerateRoundEntropyRequest {
+  string table_id = 1;
+  string round_id = 2;
+}
+
+message GenerateRoundEntropyResponse {
+  string rng_id = 1;
+  string table_id = 2;
+  string round_id = 3;
+  string server_seed_hash = 4;
+  string entropy_hex = 5;
+  double crash_point = 6;
+  int64 created_at_unix_ms = 7;
+}
