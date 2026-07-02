@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Crash SignalR Client</title>
+  <script src="https://cdn.jsdelivr.net/npm/@microsoft/signalr@8.0.7/dist/browser/signalr.min.js"></script>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Arial, sans-serif;
+      background: #f5f7fa;
+      color: #17202a;
+    }
+
+    body {
+      margin: 0;
+      padding: 32px;
+    }
+
+    main {
+      max-width: 760px;
+      margin: 0 auto;
+      display: grid;
+      gap: 18px;
+    }
+
+    section {
+      background: #ffffff;
+      border: 1px solid #d9e0e8;
+      border-radius: 8px;
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+    }
+
+    h1,
+    h2 {
+      margin: 0;
+      line-height: 1.2;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    input {
+      height: 38px;
+      padding: 0 10px;
+      border: 1px solid #b8c2cc;
+      border-radius: 6px;
+      font-size: 15px;
+    }
+
+    button {
+      min-height: 40px;
+      border: 0;
+      border-radius: 6px;
+      background: #1769aa;
+      color: white;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    #status {
+      font-weight: 700;
+    }
+
+    pre {
+      min-height: 180px;
+      margin: 0;
+      padding: 12px;
+      overflow: auto;
+      border-radius: 6px;
+      background: #101820;
+      color: #d8f3dc;
+      white-space: pre-wrap;
+    }
+
+    @media (max-width: 620px) {
+      body {
+        padding: 18px;
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Crash SignalR Client</h1>
+
+    <section>
+      <h2>Connection</h2>
+      <div class="grid">
+        <label>
+          Name
+          <input id="name" value="Test Player" autocomplete="name">
+        </label>
+        <label>
+          Username
+          <input id="username" value="player-1" autocomplete="username">
+        </label>
+        <label>
+          Table ID
+          <input id="tableId" value="table-1">
+        </label>
+        <label>
+          Gateway API
+          <input id="gatewayApi" value="http://localhost:5003">
+        </label>
+      </div>
+      <button id="connectButton">Connect</button>
+      <div>Status: <span id="status">disconnected</span></div>
+    </section>
+
+    <section>
+      <h2>Bet Message</h2>
+      <div class="grid">
+        <label>
+          Amount
+          <input id="amount" type="number" min="0" step="0.01" value="10">
+        </label>
+        <label>
+          Currency
+          <input id="currency" value="USD">
+        </label>
+        <label>
+          Auto Cash Out
+          <input id="autoCashOut" type="number" min="1" step="0.01" value="2">
+        </label>
+      </div>
+      <button id="sendBetButton" disabled>Send Bet</button>
+    </section>
+
+    <section>
+      <h2>Log</h2>
+      <pre id="log"></pre>
+    </section>
+  </main>
+
+  <script>
+    let connection = null;
+
+    const connectButton = document.getElementById("connectButton");
+    const sendBetButton = document.getElementById("sendBetButton");
+    const statusElement = document.getElementById("status");
+    const logElement = document.getElementById("log");
+
+    connectButton.addEventListener("click", connect);
+    sendBetButton.addEventListener("click", sendBet);
+
+    async function connect() {
+      const gatewayApi = getValue("gatewayApi").replace(/\/$/, "");
+      setStatus("requesting connection");
+
+      const response = await fetch(`${gatewayApi}/dev/connections`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: getValue("name"),
+          username: getValue("username"),
+          tableId: getValue("tableId")
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Connection API failed with ${response.status}`);
+      }
+
+      const connectionInfo = await response.json();
+      appendLog("connection info", connectionInfo);
+
+      connection = new signalR.HubConnectionBuilder()
+        .withUrl(connectionInfo.hubUrl, {
+          accessTokenFactory: () => connectionInfo.accessToken
+        })
+        .withAutomaticReconnect()
+        .build();
+
+      connection.onreconnecting(() => setStatus("reconnecting"));
+      connection.onreconnected(() => setStatus("connected"));
+      connection.onclose(() => {
+        setStatus("disconnected");
+        sendBetButton.disabled = true;
+      });
+
+      await connection.start();
+      setStatus("connected");
+      sendBetButton.disabled = false;
+    }
+
+    async function sendBet() {
+      if (!connection) {
+        return;
+      }
+
+      const message = {
+        type: "bet",
+        amount: Number(getValue("amount")),
+        currency: getValue("currency"),
+        autoCashOut: Number(getValue("autoCashOut"))
+      };
+
+      await connection.invoke("SendMessage", message);
+      appendLog("sent bet", message);
+    }
+
+    function getValue(id) {
+      return document.getElementById(id).value.trim();
+    }
+
+    function setStatus(value) {
+      statusElement.textContent = value;
+      appendLog("status", value);
+    }
+
+    function appendLog(label, value) {
+      const line = `[${new Date().toISOString()}] ${label}: ${JSON.stringify(value, null, 2)}`;
+      logElement.textContent = `${line}\n${logElement.textContent}`;
+    }
+
+    window.addEventListener("unhandledrejection", event => {
+      setStatus("error");
+      appendLog("error", event.reason?.message ?? String(event.reason));
+    });
+  </script>
+</body>
+</html>

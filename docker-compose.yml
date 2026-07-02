@@ -31,6 +31,23 @@ services:
       mysql:
         condition: service_healthy
 
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: crash-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: crash
+      RABBITMQ_DEFAULT_PASS: crash_password
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   rng-service:
     build:
       context: .
@@ -46,6 +63,35 @@ services:
       mysql:
         condition: service_healthy
 
+  realtime-gateway:
+    build:
+      context: .
+      dockerfile: src/RealtimeGateway/Dockerfile
+    container_name: crash-realtime-gateway
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      Broker__HostName: rabbitmq
+      Broker__Port: 5672
+      Broker__UserName: crash
+      Broker__Password: crash_password
+      Broker__ExchangeName: crash.player-messages
+      Jwt__SigningKey: local-dev-signalr-jwt-signing-key-change-me
+    ports:
+      - "5003:8080"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  client:
+    build:
+      context: .
+      dockerfile: docker/client/Dockerfile
+    container_name: crash-client
+    ports:
+      - "80:80"
+    depends_on:
+      - realtime-gateway
+
   game-engine:
     build:
       context: .
@@ -54,10 +100,22 @@ services:
     environment:
       ASPNETCORE_URLS: http://+:8080
       Services__Rng__Address: http://rng-service:8080
+      Broker__HostName: rabbitmq
+      Broker__Port: 5672
+      Broker__UserName: crash
+      Broker__Password: crash_password
+      Broker__ExchangeName: crash.player-messages
+      GameEngine__EngineId: engine-1
+      GameEngine__TableIds__0: default-table
+      GameEngine__TableIds__1: table-1
     ports:
       - "5002:8080"
     depends_on:
-      - rng-service
+      rng-service:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
 
 volumes:
   mysql-data:
+  rabbitmq-data:
