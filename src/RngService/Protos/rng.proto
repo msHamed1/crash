@@ -11,6 +11,8 @@ service Rng {
 message GenerateRoundEntropyRequest {
   string table_id = 1;
   string round_id = 2;
+  string client_seed = 3;
+  uint64 nonce = 4;
 }
 
 message GenerateRoundEntropyResponse {
@@ -21,4 +23,7 @@ message GenerateRoundEntropyResponse {
   string entropy_hex = 5;
   double crash_point = 6;
   int64 created_at_unix_ms = 7;
+  string client_seed = 8;
+  uint64 nonce = 9;
+  string rng_algorithm_version = 10;
 }

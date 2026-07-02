@@ -17,6 +17,20 @@ services:
       timeout: 3s
       retries: 20
 
+  phpmyadmin:
+    image: phpmyadmin:latest
+    container_name: crash-phpmyadmin
+    environment:
+      PMA_HOST: mysql
+      PMA_PORT: 3306
+      PMA_USER: crash
+      PMA_PASSWORD: crash_password
+    ports:
+      - "8081:80"
+    depends_on:
+      mysql:
+        condition: service_healthy
+
   rng-service:
     build:
       context: .
@@ -25,6 +39,7 @@ services:
     environment:
       ASPNETCORE_URLS: http://+:8080
       MySql__ConnectionString: Server=mysql;Port=3306;Database=crash_game;User=crash;Password=crash_password;
+      Rng__ServerSeedEncryptionKey: XTTjvgjhdnIEGijXEuDdt0cfk0cMgCG/rbRTNGt/bb8=
     ports:
       - "5001:8080"
     depends_on:

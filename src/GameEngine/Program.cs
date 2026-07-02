@@ -17,11 +17,11 @@ var app = builder.Build();
 app.MapGet("/", () => "GameEngine is running. POST /rounds/start to generate crash round entropy.");
 
 app.MapPost("/rounds/start", async (
-    StartRoundRequest request,
+    StartRoundRequest? request,
     RoundEngine roundEngine,
     CancellationToken cancellationToken) =>
 {
-    var round = await roundEngine.StartRoundAsync(request, cancellationToken);
+    var round = await roundEngine.StartRoundAsync(request ?? new StartRoundRequest(null, null, null, null), cancellationToken);
     return Results.Created($"/rounds/{round.RoundId}", round);
 });
 

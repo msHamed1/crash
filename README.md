@@ -19,8 +19,10 @@ Start one round:
 ```bash
 curl -X POST http://localhost:5002/rounds/start \
   -H "Content-Type: application/json" \
-  -d '{"tableId":"table-1"}'
+  -d '{"tableId":"table-1","roundId":"round-1","clientSeed":"player-seed-1","nonce":0}'
 ```
+
+Submitting the same `tableId` and `roundId` again returns the stored RNG result instead of creating a second result.
 
 ## Current Scope
 

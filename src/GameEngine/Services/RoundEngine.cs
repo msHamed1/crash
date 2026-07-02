@@ -2,7 +2,11 @@ using Crash.Rng;
 
 namespace GameEngine.Services;
 
-public sealed record StartRoundRequest(string? TableId);
+public sealed record StartRoundRequest(
+    string? TableId,
+    string? RoundId,
+    string? ClientSeed,
+    ulong? Nonce);
 
 public sealed record StartedRoundResponse(
     string TableId,
@@ -10,6 +14,9 @@ public sealed record StartedRoundResponse(
     string RngId,
     string ServerSeedHash,
     string EntropyHex,
+    string ClientSeed,
+    ulong Nonce,
+    string RngAlgorithmVersion,
     double CrashPoint,
     DateTimeOffset CreatedAt);
 
@@ -23,12 +30,20 @@ public sealed class RoundEngine(Rng.RngClient rngClient)
             ? "default-table"
             : request.TableId.Trim();
 
-        var roundId = $"round-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}";
+        var roundId = string.IsNullOrWhiteSpace(request.RoundId)
+            ? $"round-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}"
+            : request.RoundId.Trim();
+        var clientSeed = string.IsNullOrWhiteSpace(request.ClientSeed)
+            ? Guid.NewGuid().ToString("N")
+            : request.ClientSeed.Trim();
+
         var entropy = await rngClient.GenerateRoundEntropyAsync(
             new GenerateRoundEntropyRequest
             {
                 TableId = tableId,
-                RoundId = roundId
+                RoundId = roundId,
+                ClientSeed = clientSeed,
+                Nonce = request.Nonce ?? 0UL
             },
             cancellationToken: cancellationToken);
 
@@ -38,6 +53,9 @@ public sealed class RoundEngine(Rng.RngClient rngClient)
             entropy.RngId,
             entropy.ServerSeedHash,
             entropy.EntropyHex,
+            entropy.ClientSeed,
+            entropy.Nonce,
+            entropy.RngAlgorithmVersion,
             entropy.CrashPoint,
             DateTimeOffset.FromUnixTimeMilliseconds(entropy.CreatedAtUnixMs));
     }
