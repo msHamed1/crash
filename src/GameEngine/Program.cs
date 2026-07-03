@@ -1,7 +1,10 @@
 using Crash.Rng;
+using GameEngine.Context;
 using GameEngine.Messaging;
 using GameEngine.Options;
+using GameEngine.Repository;
 using GameEngine.Services;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -22,6 +25,15 @@ builder.Services.AddSingleton(brokerOptions);
 builder.Services.AddSingleton(gameEngineOptions);
 builder.Services.AddSingleton<RoundEngine>();
 builder.Services.AddHostedService<PlayerMessageConsumer>();
+builder.Services.AddDbContext<DataContext>(options =>
+{
+    var connectionString = builder.Configuration.GetConnectionString("MySql");
+    options.UseMySql(
+        connectionString,
+        ServerVersion.AutoDetect(connectionString)
+    );
+});
+builder.Services.AddScoped<IRoundRepository, RoundRepository>();
 
 var app = builder.Build();
 
