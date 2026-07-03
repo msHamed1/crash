@@ -27,4 +27,9 @@
     <Protobuf Include="..\RngService\Protos\rng.proto" GrpcServices="Client" Link="Protos\rng.proto" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\Crash.Domain\Crash.Domain.csproj" />
+    <ProjectReference Include="..\Crash.Persistence\Crash.Persistence.csproj" />
+  </ItemGroup>
+
 </Project>

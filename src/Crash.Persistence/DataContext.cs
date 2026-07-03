@@ -1,6 +1,7 @@
-using GameEngine.Entities;
+using Crash.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
-namespace GameEngine.Context;
+
+namespace Crash.Persistence;
 
 public class DataContext: DbContext
 {

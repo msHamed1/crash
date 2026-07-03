@@ -1,5 +1,8 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/Crash.Domain/Crash.Domain.csproj" />
+    <Project Path="src/Crash.Persistence/Crash.Persistence.csproj" />
+    <Project Path="src/DbWorkers/DbWorkers.csproj" />
     <Project Path="src/GameEngine/GameEngine.csproj" />
     <Project Path="src/RngService/RngService.csproj" />
     <Project Path="src/RealtimeGateway/RealtimeGateway.csproj" />

@@ -1,5 +1,5 @@
-using GameEngine.Context;
-using GameEngine.Entities;
+using Crash.Domain.Entities;
+using Crash.Persistence;
 
 namespace GameEngine.Repository;
 

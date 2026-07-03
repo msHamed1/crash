@@ -5,6 +5,8 @@ EXPOSE 8080
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 COPY ["src/GameEngine/GameEngine.csproj", "src/GameEngine/"]
+COPY ["src/Crash.Domain/Crash.Domain.csproj", "src/Crash.Domain/"]
+COPY ["src/Crash.Persistence/Crash.Persistence.csproj", "src/Crash.Persistence/"]
 COPY ["src/RngService/RngService.csproj", "src/RngService/"]
 COPY ["src/RngService/Protos/rng.proto", "src/RngService/Protos/"]
 RUN dotnet restore "src/GameEngine/GameEngine.csproj"

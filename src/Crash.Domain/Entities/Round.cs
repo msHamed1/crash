@@ -1,4 +1,4 @@
-namespace GameEngine.Entities;
+namespace Crash.Domain.Entities;
 
 public class Round
 {

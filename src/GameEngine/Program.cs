@@ -1,5 +1,5 @@
 using Crash.Rng;
-using GameEngine.Context;
+using Crash.Persistence;
 using GameEngine.Messaging;
 using GameEngine.Options;
 using GameEngine.Repository;
@@ -27,7 +27,10 @@ builder.Services.AddSingleton<RoundEngine>();
 builder.Services.AddHostedService<PlayerMessageConsumer>();
 builder.Services.AddDbContext<DataContext>(options =>
 {
-    var connectionString = builder.Configuration.GetConnectionString("MySql");
+    var connectionString = builder.Configuration.GetConnectionString("MySql")
+        ?? builder.Configuration["MySql:ConnectionString"]
+        ?? throw new InvalidOperationException("MySql connection string is required.");
+
     options.UseMySql(
         connectionString,
         ServerVersion.AutoDetect(connectionString)
