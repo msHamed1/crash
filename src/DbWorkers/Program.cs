@@ -1,5 +1,7 @@
+using Crash.Domain.Options;
 using Crash.Persistence;
-using Microsoft.EntityFrameworkCore;
+ using DbWorkers.Services;
+ using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -17,6 +19,12 @@ builder.Services.AddDbContext<DataContext>(options =>
         ServerVersion.AutoDetect(connectionString)
     );
 });
+var dbWorkerBrokerOptions= builder.Configuration.  
+GetSection(DbBrokerOptions.SectionName)
+    .Get<DbBrokerOptions>() ?? new DbBrokerOptions();
+builder.Services.AddSingleton(dbWorkerBrokerOptions);
+
+builder.Services.AddHostedService<DbMessageConsumer>();
 
 var app = builder.Build();
 

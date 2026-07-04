@@ -1,15 +1,15 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Crash.Domain.Options;
 using RealtimeGateway.Dev;
 using RealtimeGateway.Hubs;
 using RealtimeGateway.Messaging;
-using RealtimeGateway.Options;
-
+ 
 var builder = WebApplication.CreateBuilder(args);
 
 var brokerOptions = builder.Configuration
-    .GetSection(BrokerOptions.SectionName)
-    .Get<BrokerOptions>() ?? new BrokerOptions();
+    .GetSection(PlayerBrokerOptions.SectionName)
+    .Get<PlayerBrokerOptions>() ?? new PlayerBrokerOptions();
 var jwtOptions = builder.Configuration
     .GetSection(JwtOptions.SectionName)
     .Get<JwtOptions>() ?? new JwtOptions();

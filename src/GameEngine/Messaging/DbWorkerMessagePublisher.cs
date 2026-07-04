@@ -4,35 +4,36 @@ using System.Text.Json.Serialization;
 using Crash.Domain.Contracts;
 using Crash.Domain.Options;
 using RabbitMQ.Client;
- 
-namespace RealtimeGateway.Messaging;
 
-public interface IPlayerMessagePublisher
+namespace GameEngine.Messaging;
+
+
+public interface IDbWorkerMessagePublisher
 {
-    Task PublishAsync(PlayerMessageEnvelope message, CancellationToken cancellationToken);
+    Task PublishAsync(DbWorkerMessageEnvelope message, CancellationToken ct);
 }
-
-public sealed class PlayerMessagePublisher : IPlayerMessagePublisher, IDisposable
+public class DbWorkerMessagePublisher :IDbWorkerMessagePublisher, IDisposable
 {
+    
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
-    private readonly PlayerBrokerOptions options;
+    private readonly DbBrokerOptions options;
     private readonly IConnection connection;
     private readonly IModel channel;
     private readonly object publishLock = new();
 
-    public PlayerMessagePublisher(PlayerBrokerOptions options)
+    public DbWorkerMessagePublisher(DbBrokerOptions options  )
     {
         this.options = options;
         connection = CreateConnection(options);
         channel = connection.CreateModel();
+        
     }
-
-    public Task PublishAsync(PlayerMessageEnvelope message, CancellationToken cancellationToken)
+    public Task PublishAsync(DbWorkerMessageEnvelope message, CancellationToken ct)
     {
-        cancellationToken.ThrowIfCancellationRequested();
+        ct.ThrowIfCancellationRequested();
 
         var body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message, JsonOptions));
 
@@ -43,42 +44,47 @@ public sealed class PlayerMessagePublisher : IPlayerMessagePublisher, IDisposabl
             properties.ContentType = "application/json";
             properties.MessageId = message.MessageId.ToString();
             properties.Type = message.Type.ToString();
-            properties.Timestamp = new AmqpTimestamp(message.ReceivedAt.ToUnixTimeSeconds());
-
+            properties.Timestamp=new AmqpTimestamp(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            
             channel.ExchangeDeclare(
                 exchange: options.ExchangeName,
-                type: ExchangeType.Direct,
+                type: "direct",
                 durable: true,
-                autoDelete: false);
+                autoDelete:false
+                );
             channel.QueueDeclare(
-                queue: GetTableQueueName(message.TableId),
+                queue: GetTableQueueName(),
                 durable: true,
                 exclusive: false,
-                autoDelete: false);
+                autoDelete: false
+            );
+            
             channel.QueueBind(
-                queue: GetTableQueueName(message.TableId),
+                queue: GetTableQueueName(),
                 exchange: options.ExchangeName,
-                routingKey: message.TableId);
-
-            // Use table id as the routing key so the message lands in that table's durable queue.
+                routingKey:"DbWorkers");
+            
+            
+            // Use message type as the routing key so the message lands in that table's durable queue.
             channel.BasicPublish(
                 exchange: options.ExchangeName,
-                routingKey: message.TableId,
+                routingKey: "DbWorkers",
                 mandatory: false,
                 basicProperties: properties,
                 body: body);
         }
-
+        
         return Task.CompletedTask;
-    }
 
+    }
+    
     public void Dispose()
     {
         channel.Dispose();
         connection.Dispose();
     }
 
-    private static IConnection CreateConnection(PlayerBrokerOptions options)
+    private static IConnection CreateConnection(DbBrokerOptions options)
     {
         var factory = new ConnectionFactory
         {
@@ -87,13 +93,16 @@ public sealed class PlayerMessagePublisher : IPlayerMessagePublisher, IDisposabl
             UserName = options.UserName,
             Password = options.Password,
             DispatchConsumersAsync = true
+
         };
-
+        
         return factory.CreateConnection();
-    }
 
-    private static string GetTableQueueName(string tableId)
-    {
-        return $"table.{tableId}.player-messages";
     }
+    
+    private static string GetTableQueueName()
+    {
+        return "db.events";
+    }
+    
 }

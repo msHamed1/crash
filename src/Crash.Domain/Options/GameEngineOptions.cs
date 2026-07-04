@@ -1,4 +1,4 @@
-namespace GameEngine.Options;
+namespace Crash.Domain.Options;
 
 public sealed class GameEngineOptions
 {

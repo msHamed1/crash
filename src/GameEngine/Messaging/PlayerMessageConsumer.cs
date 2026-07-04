@@ -1,14 +1,15 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using GameEngine.Options;
+using Crash.Domain.Contracts;
+using Crash.Domain.Options;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 
 namespace GameEngine.Messaging;
 
 public sealed class PlayerMessageConsumer(
-    BrokerOptions brokerOptions,
+    PlayerBrokerOptions brokerOptions,
     GameEngineOptions gameEngineOptions,
     ILogger<PlayerMessageConsumer> logger) : BackgroundService
 {

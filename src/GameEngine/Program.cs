@@ -1,28 +1,33 @@
+using Crash.Domain.Options;
 using Crash.Rng;
 using Crash.Persistence;
 using GameEngine.Messaging;
-using GameEngine.Options;
-using GameEngine.Repository;
-using GameEngine.Services;
+ using GameEngine.Services;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
 var rngAddress = builder.Configuration["Services:Rng:Address"]
     ?? throw new InvalidOperationException("Services:Rng:Address is required.");
-var brokerOptions = builder.Configuration
-    .GetSection(BrokerOptions.SectionName)
-    .Get<BrokerOptions>() ?? new BrokerOptions();
+var playerBrokerOptions = builder.Configuration
+    .GetSection(PlayerBrokerOptions.SectionName)
+    .Get<PlayerBrokerOptions>() ?? new PlayerBrokerOptions();
 var gameEngineOptions = builder.Configuration
     .GetSection(GameEngineOptions.SectionName)
     .Get<GameEngineOptions>() ?? new GameEngineOptions();
 
+var dbWorkerBrokerOptions = builder.Configuration
+    .GetSection(DbBrokerOptions.SectionName)
+    .Get<DbBrokerOptions>() ?? new DbBrokerOptions();
 builder.Services.AddGrpcClient<Rng.RngClient>(options =>
 {
     options.Address = new Uri(rngAddress);
 });
-builder.Services.AddSingleton(brokerOptions);
+builder.Services.AddSingleton(dbWorkerBrokerOptions);
+
+builder.Services.AddSingleton(playerBrokerOptions);
 builder.Services.AddSingleton(gameEngineOptions);
+builder.Services.AddSingleton<IDbWorkerMessagePublisher, DbWorkerMessagePublisher>();
 builder.Services.AddSingleton<RoundEngine>();
 builder.Services.AddHostedService<PlayerMessageConsumer>();
 builder.Services.AddDbContext<DataContext>(options =>
@@ -36,8 +41,6 @@ builder.Services.AddDbContext<DataContext>(options =>
         ServerVersion.AutoDetect(connectionString)
     );
 });
-builder.Services.AddScoped<IRoundRepository, RoundRepository>();
-
 var app = builder.Build();
 
 app.MapGet("/", () => "GameEngine is running. POST /rounds/start to generate crash round entropy.");

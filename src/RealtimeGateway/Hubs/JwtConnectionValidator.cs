@@ -1,9 +1,9 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Crash.Domain.Options;
 using Microsoft.AspNetCore.SignalR;
-using RealtimeGateway.Options;
-
+ 
 namespace RealtimeGateway.Hubs;
 
 public sealed record PlayerConnectionContext(string TableId, string PlayerId);

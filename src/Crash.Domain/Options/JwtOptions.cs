@@ -1,4 +1,4 @@
-namespace RealtimeGateway.Options;
+namespace Crash.Domain.Options;
 
 public sealed class JwtOptions
 {

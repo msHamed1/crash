@@ -1,3 +1,4 @@
+using Crash.Domain.Contracts;
 using Microsoft.AspNetCore.SignalR;
 using RealtimeGateway.Messaging;
 

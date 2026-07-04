@@ -1,4 +1,4 @@
-namespace RealtimeGateway.Messaging;
+namespace Crash.Domain.Contracts;
 
 public enum PlayerMessageType
 {
