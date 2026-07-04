@@ -121,6 +121,8 @@ services:
     build:
       context: .
       dockerfile: src/DbWorkers/Dockerfile
+    deploy:
+      replicas: 3
     environment:
       ASPNETCORE_URLS: http://+:8080
       MySql__ConnectionString: Server=mysql;Port=3306;Database=crash_game;User=crash;Password=crash_password;
@@ -129,8 +131,6 @@ services:
       DbBroker__UserName: crash
       DbBroker__Password: crash_password
       DbBroker__ExchangeName: db.worker-messages
-    ports:
-      - "5004:8080"
     depends_on:
       mysql:
         condition: service_healthy
