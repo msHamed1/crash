@@ -36,6 +36,63 @@ The engine must not process commands for a table it does not currently own.
 The fencing token is attached to dangerous durable writes so stale owners cannot
 overwrite state after failover.
 
+Fencing token lifecycle:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant EngineA as GameEngine A
+    participant Store as Ownership Store
+    participant RegistryA as A OwnedTableRegistry
+    participant Db as MySQL
+    participant EngineB as GameEngine B
+
+    EngineA->>Store: TryAcquire(table-1, engine-a)
+    Store-->>EngineA: Acquired token=41 lease=active
+    EngineA->>RegistryA: MarkOwned(table-1, token=41)
+    EngineA->>Db: Write RoundCreated(table-1, token=41)
+    Db-->>EngineA: Accepted
+
+    Note over EngineA,Store: Engine A pauses or loses network
+
+    EngineB->>Store: TryAcquire(table-1, engine-b)
+    Store-->>EngineB: Acquired token=42 lease=active
+    EngineB->>Db: Write RoundCreated(table-1, token=42)
+    Db-->>EngineB: Accepted
+
+    EngineA->>Db: Late write CashOutAccepted(table-1, token=41)
+    Db-->>EngineA: Rejected stale fencing token
+```
+
+The database or durable write boundary must compare the incoming fencing token
+against the latest accepted token for the table. A stale engine may still be
+alive, but its writes are rejected because its token is older.
+
+Table acquisition and renewal:
+
+```mermaid
+flowchart TD
+    Start["BackgroundService starts"] --> Load["Read configured TableIds"]
+    Load --> Loop["For each TableId"]
+    Loop --> Owned{"Already in local registry?"}
+
+    Owned -- No --> Acquire["TryAcquire(TableId, OwnerInstanceId)"]
+    Acquire --> Acquired{"Acquired?"}
+    Acquired -- Yes --> Save["Store TableId + FencingToken in OwnedTableRegistry"]
+    Acquired -- No --> Wait["Wait until next renewal interval"]
+
+    Owned -- Yes --> Renew["Renew(TableId, OwnerInstanceId, FencingToken)"]
+    Renew --> Renewed{"Renewed?"}
+    Renewed -- Yes --> Update["Update lease expiry and fencing token"]
+    Renewed -- No --> Remove["Remove table from local registry"]
+
+    Save --> Wait
+    Update --> Wait
+    Remove --> StopTable["Stop processing table commands"]
+    StopTable --> Wait
+    Wait --> Loop
+```
+
 Pseudo shape:
 
 ```csharp
@@ -97,6 +154,36 @@ Responsibilities:
 - mutate memory before publishing any external message
 - publish player/table realtime facts
 - publish durable DB worker facts
+
+Command processor flow:
+
+```mermaid
+flowchart TD
+    Consumer["PlayerMessageConsumer"] --> Write["Write EngineCommand to Channel"]
+    Write --> Channel["Channel&lt;EngineCommand&gt;"]
+    Channel --> Processor["EngineCommandProcessorBackgroundService"]
+    Processor --> Ownership{"Owns command.TableId?"}
+
+    Ownership -- No --> Drop["Reject or ignore command"]
+    Ownership -- Yes --> Engine["CrashTableEngine"]
+
+    Engine --> Decision{"Command type"}
+    Decision --> Bet["PlaceBet"]
+    Decision --> CashOut["CashOut"]
+    Decision --> Tick["Tick"]
+    Decision --> StartRound["StartRound"]
+    Decision --> CrashRound["CrashRound"]
+
+    Bet --> Result["EngineResult"]
+    CashOut --> Result
+    Tick --> Result
+    StartRound --> Result
+    CrashRound --> Result
+
+    Result --> PlayerFacts["Publish player facts"]
+    Result --> TableFacts["Publish table facts"]
+    Result --> DbFacts["Publish DB worker facts"]
+```
 
 Pseudo shape:
 
@@ -191,6 +278,33 @@ Durable DB worker facts:
 `TableId` must be present on commands, rounds, bets, snapshots, durable events,
 and realtime messages. It is the partition and ownership boundary.
 
+## Background Services
+
+```mermaid
+flowchart LR
+    subgraph GameEngine["GameEngine process"]
+        OwnershipSvc["TableOwnershipBackgroundService"]
+        CommandSvc["EngineCommandProcessorBackgroundService"]
+        ConsumerSvc["PlayerMessageConsumer"]
+        Registry["OwnedTableRegistry"]
+        Channel["Channel&lt;EngineCommand&gt;"]
+        Engines["CrashTableEngine per owned TableId"]
+    end
+
+    OwnershipSvc --> Registry
+    OwnershipSvc <--> Store["Ownership Store"]
+    ConsumerSvc --> Channel
+    CommandSvc --> Channel
+    CommandSvc --> Registry
+    CommandSvc --> Engines
+    Engines --> Realtime["Realtime facts"]
+    Engines --> Durable["Durable DB facts"]
+```
+
+`TableOwnershipBackgroundService` controls whether the process is allowed to run
+a table. `EngineCommandProcessorBackgroundService` controls the ordered command
+execution for tables that are currently owned.
+
 ## Run
 
 ```bash
@@ -278,3 +392,51 @@ In progress / next:
 - realtime fanout for table/player facts
 - durable business facts for DB workers
 - wallet settlement flow
+
+## Infrastructure Diagram
+
+```mermaid
+flowchart TD
+    Browser["Player Browser / Mobile Client"]
+    Gateway["RealtimeGateway<br/>SignalR Hub"]
+    PlayerExchange["RabbitMQ<br/>player command exchange"]
+    TableQueue["RabbitMQ<br/>table.{tableId}.player-messages"]
+
+    subgraph Engine["GameEngine instance"]
+        OwnershipSvc["TableOwnershipBackgroundService"]
+        Consumer["PlayerMessageConsumer"]
+        Channel["Channel&lt;EngineCommand&gt;"]
+        Processor["EngineCommandProcessorBackgroundService"]
+        TableEngine["CrashTableEngine<br/>authoritative memory"]
+        RoundApi["Round API"]
+    end
+
+    OwnershipStore["Ownership Store<br/>lease + fencing token"]
+    Rng["RngService<br/>gRPC entropy"]
+    DbExchange["RabbitMQ<br/>DB worker exchange"]
+    DbQueue["RabbitMQ<br/>db.events queue"]
+    Workers["DbWorkers"]
+    MySql["MySQL"]
+
+    Browser --> Gateway
+    Gateway --> PlayerExchange
+    PlayerExchange --> TableQueue
+    TableQueue --> Consumer
+    Consumer --> Channel
+    Channel --> Processor
+    Processor --> TableEngine
+
+    OwnershipSvc <--> OwnershipStore
+    OwnershipSvc --> TableEngine
+
+    RoundApi --> Rng
+    TableEngine --> Rng
+    Rng --> MySql
+
+    TableEngine --> Gateway
+    TableEngine --> DbExchange
+    DbExchange --> DbQueue
+    DbQueue --> Workers
+    Workers --> MySql
+    TableEngine -. "fencing token on durable facts" .-> MySql
+```
