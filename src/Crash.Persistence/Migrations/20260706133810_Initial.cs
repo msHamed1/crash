@@ -7,7 +7,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace Crash.Persistence.Migrations
 {
     /// <inheritdoc />
-    public partial class InitialCreate : Migration
+    public partial class Initial : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
@@ -16,23 +16,42 @@ namespace Crash.Persistence.Migrations
                 .Annotation("MySql:CharSet", "utf8mb4");
 
             migrationBuilder.CreateTable(
+                name: "Owners",
+                columns: table => new
+                {
+                    Id = table.Column<long>(type: "bigint", nullable: false)
+                        .Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
+                    Name = table.Column<string>(type: "longtext", nullable: false)
+                        .Annotation("MySql:CharSet", "utf8mb4")
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_Owners", x => x.Id);
+                })
+                .Annotation("MySql:CharSet", "utf8mb4");
+
+            migrationBuilder.CreateTable(
                 name: "Tables",
                 columns: table => new
                 {
-                    Id = table.Column<int>(type: "int", nullable: false)
+                    Id = table.Column<long>(type: "bigint", nullable: false)
                         .Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
                     TableName = table.Column<string>(type: "longtext", nullable: false)
                         .Annotation("MySql:CharSet", "utf8mb4"),
-                    OwnerId = table.Column<string>(type: "longtext", nullable: true)
-                        .Annotation("MySql:CharSet", "utf8mb4"),
+                    OwnerId = table.Column<long>(type: "bigint", nullable: true),
                     FencingToken = table.Column<long>(type: "bigint", nullable: false),
-                    LeaseExpiresAt = table.Column<DateTimeOffset>(type: "datetime(6)", nullable: false),
-                    CreatedAt = table.Column<DateTimeOffset>(type: "datetime(6)", nullable: false),
+                    LeaseExpiresAt = table.Column<DateTimeOffset>(type: "datetime(6)", nullable: true),
+                    CreatedAt = table.Column<DateTimeOffset>(type: "datetime(6)", nullable: false, defaultValueSql: "CURRENT_TIMESTAMP(6)"),
                     UpdatedAt = table.Column<DateTimeOffset>(type: "datetime(6)", nullable: true)
                 },
                 constraints: table =>
                 {
                     table.PrimaryKey("PK_Tables", x => x.Id);
+                    table.ForeignKey(
+                        name: "FK_Tables_Owners_OwnerId",
+                        column: x => x.OwnerId,
+                        principalTable: "Owners",
+                        principalColumn: "Id");
                 })
                 .Annotation("MySql:CharSet", "utf8mb4");
 
@@ -43,6 +62,7 @@ namespace Crash.Persistence.Migrations
                     Id = table.Column<string>(type: "varchar(255)", nullable: false)
                         .Annotation("MySql:CharSet", "utf8mb4"),
                     TableId = table.Column<int>(type: "int", nullable: false),
+                    TableId1 = table.Column<long>(type: "bigint", nullable: false),
                     OwnerId = table.Column<string>(type: "longtext", nullable: true)
                         .Annotation("MySql:CharSet", "utf8mb4"),
                     FencingToken = table.Column<long>(type: "bigint", nullable: false),
@@ -57,8 +77,8 @@ namespace Crash.Persistence.Migrations
                 {
                     table.PrimaryKey("PK_Rounds", x => x.Id);
                     table.ForeignKey(
-                        name: "FK_Rounds_Tables_TableId",
-                        column: x => x.TableId,
+                        name: "FK_Rounds_Tables_TableId1",
+                        column: x => x.TableId1,
                         principalTable: "Tables",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
@@ -139,9 +159,14 @@ namespace Crash.Persistence.Migrations
                 column: "RoundId");
 
             migrationBuilder.CreateIndex(
-                name: "IX_Rounds_TableId",
+                name: "IX_Rounds_TableId1",
                 table: "Rounds",
-                column: "TableId");
+                column: "TableId1");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Tables_OwnerId",
+                table: "Tables",
+                column: "OwnerId");
         }
 
         /// <inheritdoc />
@@ -158,6 +183,9 @@ namespace Crash.Persistence.Migrations
 
             migrationBuilder.DropTable(
                 name: "Tables");
+
+            migrationBuilder.DropTable(
+                name: "Owners");
         }
     }
 }

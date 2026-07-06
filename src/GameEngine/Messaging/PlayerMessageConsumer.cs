@@ -13,10 +13,15 @@ public sealed class PlayerMessageConsumer(
     GameEngineOptions gameEngineOptions,
     ILogger<PlayerMessageConsumer> logger) : BackgroundService
 {
+    private static readonly TimeSpan OwnershipReconcileInterval = TimeSpan.FromSeconds(1);
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
+
+    private readonly object _channelLock = new();
+    private readonly Dictionary<long, string> _consumerTagsPerTable = new();
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -24,8 +29,7 @@ public sealed class PlayerMessageConsumer(
         {
             try
             {
-                Consume(stoppingToken);
-                await Task.Delay(Timeout.InfiniteTimeSpan, stoppingToken);
+                await ConsumeAsync(stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -39,7 +43,7 @@ public sealed class PlayerMessageConsumer(
         }
     }
 
-    private void Consume(CancellationToken stoppingToken)
+    private async Task ConsumeAsync(CancellationToken stoppingToken)
     {
         var factory = new ConnectionFactory
         {
@@ -64,60 +68,175 @@ public sealed class PlayerMessageConsumer(
         var consumer = new AsyncEventingBasicConsumer(channel);
         consumer.Received += async (_, args) =>
         {
+            PlayerMessageEnvelope? message = null;
+
             try
             {
                 var json = Encoding.UTF8.GetString(args.Body.ToArray());
-                var message = JsonSerializer.Deserialize<PlayerMessageEnvelope>(json, JsonOptions)
+                message = JsonSerializer.Deserialize<PlayerMessageEnvelope>(json, JsonOptions)
                     ?? throw new InvalidOperationException("Player message body is empty.");
 
-                Console.WriteLine(
-                    "GameEngine {0} received {1} for table {2}, player {3}, message {4}",
+                if (!long.TryParse(message.TableId, out var tableId))
+                {
+                    logger.LogWarning(
+                        "Rejecting player message {MessageId} because table id {TableId} is not numeric.",
+                        message.MessageId,
+                        message.TableId);
+
+                    SafeNack(channel, args.DeliveryTag, requeue: false);
+                    return;
+                }
+
+                if (!gameEngineOptions.tokensPerTable.ContainsKey(tableId))
+                {
+                    // A cancelled consumer may still receive an in-flight delivery. Requeue it so the
+                    // current owner gets the message instead of this stale engine acknowledging it.
+                    logger.LogInformation(
+                        "Requeueing player message {MessageId} for table {TableId} because this engine is no longer the owner.",
+                        message.MessageId,
+                        tableId);
+
+                    SafeNack(channel, args.DeliveryTag, requeue: true);
+                    return;
+                }
+
+                logger.LogInformation(
+                    "GameEngine {EngineId} received {MessageType} for table {TableId}, player {PlayerId}, message {MessageId}.",
                     gameEngineOptions.EngineId,
                     message.Type,
                     message.TableId,
                     message.PlayerId,
                     message.MessageId);
 
-                channel.BasicAck(args.DeliveryTag, multiple: false);
+                SafeAck(channel, args.DeliveryTag);
             }
             catch (Exception exception)
             {
-                logger.LogError(exception, "Failed to process player message.");
-                channel.BasicNack(args.DeliveryTag, multiple: false, requeue: true);
+                logger.LogError(
+                    exception,
+                    "Failed to process player message {MessageId}.",
+                    message?.MessageId);
+
+                SafeNack(channel, args.DeliveryTag, requeue: true);
             }
 
             await Task.CompletedTask;
         };
 
-        foreach (var tableId in gameEngineOptions.TableIds.Where(tableId => !string.IsNullOrWhiteSpace(tableId)))
+        try
         {
-            var normalizedTableId = tableId.Trim();
-            var queueName = GetTableQueueName(normalizedTableId);
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                ReconcileTableConsumers(channel, consumer);
+                await Task.Delay(OwnershipReconcileInterval, stoppingToken);
+            }
+        }
+        finally
+        {
+            CancelAllConsumers(channel);
+        }
+    }
 
+    private void ReconcileTableConsumers(IModel channel, AsyncEventingBasicConsumer consumer)
+    {
+        var ownedTableIds = gameEngineOptions.tokensPerTable.Keys.ToHashSet();
+
+        foreach (var tableId in ownedTableIds)
+        {
+            if (_consumerTagsPerTable.ContainsKey(tableId))
+            {
+                continue;
+            }
+
+            StartConsumingTable(channel, consumer, tableId);
+        }
+
+        foreach (var tableId in _consumerTagsPerTable.Keys.ToArray())
+        {
+            if (ownedTableIds.Contains(tableId))
+            {
+                continue;
+            }
+
+            StopConsumingTable(channel, tableId);
+        }
+    }
+
+    private void StartConsumingTable(IModel channel, AsyncEventingBasicConsumer consumer, long tableId)
+    {
+        var normalizedTableId = tableId.ToString();
+        var queueName = GetTableQueueName(normalizedTableId);
+
+        lock (_channelLock)
+        {
             channel.QueueDeclare(
                 queue: queueName,
                 durable: true,
                 exclusive: false,
                 autoDelete: false);
 
-            // Each engine consumes only the durable table queues it owns.
+            // The queue is table-owned, not engine-owned. When ownership moves, the previous
+            // engine cancels its consumer and the new owner consumes the same durable queue.
             channel.QueueBind(
                 queue: queueName,
                 exchange: brokerOptions.ExchangeName,
                 routingKey: normalizedTableId);
 
-            channel.BasicConsume(
+            var consumerTag = channel.BasicConsume(
                 queue: queueName,
                 autoAck: false,
                 consumer: consumer);
+
+            _consumerTagsPerTable[tableId] = consumerTag;
         }
 
         logger.LogInformation(
-            "Game engine {EngineId} is consuming player messages for tables: {TableIds}.",
+            "Game engine {EngineId} started consuming player messages for table {TableId}.",
             gameEngineOptions.EngineId,
-            string.Join(", ", gameEngineOptions.TableIds));
+            tableId);
+    }
 
-        WaitHandle.WaitAny([stoppingToken.WaitHandle]);
+    private void StopConsumingTable(IModel channel, long tableId)
+    {
+        if (!_consumerTagsPerTable.TryGetValue(tableId, out var consumerTag))
+        {
+            return;
+        }
+
+        lock (_channelLock)
+        {
+            channel.BasicCancel(consumerTag);
+            _consumerTagsPerTable.Remove(tableId);
+        }
+
+        logger.LogInformation(
+            "Game engine {EngineId} stopped consuming player messages for table id {TableId} because ownership was lost.",
+            gameEngineOptions.EngineId,
+            tableId);
+    }
+
+    private void CancelAllConsumers(IModel channel)
+    {
+        foreach (var tableId in _consumerTagsPerTable.Keys.ToArray())
+        {
+            StopConsumingTable(channel, tableId);
+        }
+    }
+
+    private void SafeAck(IModel channel, ulong deliveryTag)
+    {
+        lock (_channelLock)
+        {
+            channel.BasicAck(deliveryTag, multiple: false);
+        }
+    }
+
+    private void SafeNack(IModel channel, ulong deliveryTag, bool requeue)
+    {
+        lock (_channelLock)
+        {
+            channel.BasicNack(deliveryTag, multiple: false, requeue: requeue);
+        }
     }
 
     private static string GetTableQueueName(string tableId)

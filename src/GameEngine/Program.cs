@@ -2,7 +2,9 @@ using Crash.Domain.Options;
 using Crash.Rng;
 using Crash.Persistence;
 using GameEngine.Messaging;
- using GameEngine.Services;
+using GameEngine.Repository;
+using GameEngine.Seeders;
+using GameEngine.Services;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -30,6 +32,15 @@ builder.Services.AddSingleton(gameEngineOptions);
 builder.Services.AddSingleton<IDbWorkerMessagePublisher, DbWorkerMessagePublisher>();
 builder.Services.AddSingleton<RoundEngine>();
 builder.Services.AddHostedService<PlayerMessageConsumer>();
+builder.Services.AddHostedService<Core>();
+
+// Seeders 
+builder.Services.AddScoped<IDatabaseSeeder, TablesSeeder>();
+
+// Repositories
+builder.Services.AddScoped<ITableRepository, TableRepository>();
+builder.Services.AddScoped<IRoundRepository, RoundRepository>(); 
+builder.Services.AddScoped<IOwnerRepository, OwnerRepository>();
 builder.Services.AddDbContext<DataContext>(options =>
 {
     var connectionString = builder.Configuration.GetConnectionString("MySql")
@@ -42,6 +53,15 @@ builder.Services.AddDbContext<DataContext>(options =>
     );
 });
 var app = builder.Build();
+
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<DataContext>();
+    await db.Database.MigrateAsync();
+
+    var seeder = scope.ServiceProvider.GetRequiredService<IDatabaseSeeder>();
+    await seeder.SeedAsync(CancellationToken.None);
+}
 
 app.MapGet("/", () => "GameEngine is running. POST /rounds/start to generate crash round entropy.");
 

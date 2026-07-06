@@ -63,6 +63,23 @@ namespace Crash.Persistence.Migrations
                     b.ToTable("Bets");
                 });
 
+            modelBuilder.Entity("Crash.Domain.Entities.Owner", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("Owners");
+                });
+
             modelBuilder.Entity("Crash.Domain.Entities.Player", b =>
                 {
                     b.Property<int>("Id")
@@ -117,35 +134,40 @@ namespace Crash.Persistence.Migrations
                     b.Property<int>("TableId")
                         .HasColumnType("int");
 
+                    b.Property<long>("TableId1")
+                        .HasColumnType("bigint");
+
                     b.Property<DateTimeOffset?>("UpdatedAt")
                         .HasColumnType("datetime(6)");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("TableId");
+                    b.HasIndex("TableId1");
 
                     b.ToTable("Rounds");
                 });
 
             modelBuilder.Entity("Crash.Domain.Entities.Table", b =>
                 {
-                    b.Property<int>("Id")
+                    b.Property<long>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
+                        .HasColumnType("bigint");
 
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<long>("Id"));
 
                     b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("datetime(6)");
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime(6)")
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP(6)");
 
                     b.Property<long>("FencingToken")
                         .HasColumnType("bigint");
 
-                    b.Property<DateTimeOffset>("LeaseExpiresAt")
+                    b.Property<DateTimeOffset?>("LeaseExpiresAt")
                         .HasColumnType("datetime(6)");
 
-                    b.Property<string>("OwnerId")
-                        .HasColumnType("longtext");
+                    b.Property<long?>("OwnerId")
+                        .HasColumnType("bigint");
 
                     b.Property<string>("TableName")
                         .IsRequired()
@@ -155,6 +177,8 @@ namespace Crash.Persistence.Migrations
                         .HasColumnType("datetime(6)");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("OwnerId");
 
                     b.ToTable("Tables");
                 });
@@ -189,11 +213,25 @@ namespace Crash.Persistence.Migrations
                 {
                     b.HasOne("Crash.Domain.Entities.Table", "Table")
                         .WithMany("Rounds")
-                        .HasForeignKey("TableId")
+                        .HasForeignKey("TableId1")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
                     b.Navigation("Table");
+                });
+
+            modelBuilder.Entity("Crash.Domain.Entities.Table", b =>
+                {
+                    b.HasOne("Crash.Domain.Entities.Owner", "Owner")
+                        .WithMany("Tables")
+                        .HasForeignKey("OwnerId");
+
+                    b.Navigation("Owner");
+                });
+
+            modelBuilder.Entity("Crash.Domain.Entities.Owner", b =>
+                {
+                    b.Navigation("Tables");
                 });
 
             modelBuilder.Entity("Crash.Domain.Entities.Round", b =>

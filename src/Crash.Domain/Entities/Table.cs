@@ -1,17 +1,18 @@
 namespace Crash.Domain.Entities;
 
-public class Table
+public class Table :BaseEntity
 {
-    public int Id { get; set; }
+    public long Id { get; set; }
 
     public string TableName { get; set; } = null!;
 
-    public string? OwnerId { get; set; }
-    public long FencingToken { get; set; }
-    public DateTimeOffset LeaseExpiresAt { get; set; }
+    public long? OwnerId { get; set; }
+    public Owner? Owner { get; set; }
+
+    public long FencingToken { get; set; } = 0;
+    public DateTimeOffset? LeaseExpiresAt { get; set; }
 
     public List<Round> Rounds { get; set; } = new();
 
-    public DateTimeOffset CreatedAt { get; set; }
-    public DateTimeOffset? UpdatedAt { get; set; }
+    
 }
