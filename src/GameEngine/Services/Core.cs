@@ -122,10 +122,10 @@ public class Core:BackgroundService
         var instance =await owneRepository.GetByName(_options.EngineId,ct);
         if (instance is null)
         {
-            Console.WriteLine(
-                "No owner found for engine {0}",
-                _options.EngineId
-            );
+         
+            _logger.LogError(
+                "No owner found for engine {EngineId}. Creating a new owner.",
+                _options.EngineId);
            var newOwner = await owneRepository.CreateOwner( 
            new Owner {
                 Name = _options.EngineId,

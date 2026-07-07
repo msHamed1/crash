@@ -1,6 +1,7 @@
 using Crash.Domain.Options;
 using Crash.Rng;
 using Crash.Persistence;
+using Crash.Persistence.Migrations;
 using GameEngine.Messaging;
 using GameEngine.Repository;
 using GameEngine.Seeders;
@@ -52,6 +53,21 @@ builder.Services.AddDbContext<DataContext>(options =>
         ServerVersion.AutoDetect(connectionString)
     );
 });
+// Add DbLogger;
+// builder.Logging.AddProvider(
+//     new DatabaseLoggerProvider(
+//         builder.Services.BuildServiceProvider()
+//             .GetRequiredService<IServiceScopeFactory>()
+//         )
+//     );
+
+builder.Logging.AddProvider(
+    new DatabaseLoggerProvider(
+        builder.Services.BuildServiceProvider()
+            .GetRequiredService<IServiceScopeFactory>()
+    )
+);
+
 var app = builder.Build();
 
 using (var scope = app.Services.CreateScope())

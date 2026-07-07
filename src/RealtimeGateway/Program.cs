@@ -50,7 +50,7 @@ app.MapGet("/", () => "RealtimeGateway is running. Connect to /hubs/player with 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 app.MapPost("/dev/connections", (DevConnectionRequest request, HttpContext httpContext) =>
 {
-    var tableId = string.IsNullOrWhiteSpace(request.TableId) ? "table-1" : request.TableId.Trim();
+    var tableId = string.IsNullOrWhiteSpace(request.TableId) ? "1" : request.TableId.Trim();
     var username = string.IsNullOrWhiteSpace(request.Username) ? Guid.NewGuid().ToString("N") : request.Username.Trim();
     var name = string.IsNullOrWhiteSpace(request.Name) ? username : request.Name.Trim();
     var accessToken = DevJwtTokenFactory.Create(jwtOptions.SigningKey, tableId, username, name);

@@ -8,11 +8,24 @@ using RabbitMQ.Client.Events;
 
 namespace GameEngine.Messaging;
 
-public sealed class PlayerMessageConsumer(
-    PlayerBrokerOptions brokerOptions,
-    GameEngineOptions gameEngineOptions,
-    ILogger<PlayerMessageConsumer> logger) : BackgroundService
+public sealed class PlayerMessageConsumer   : BackgroundService
 {
+
+    private readonly GameEngineOptions _gameEngineOptions;
+
+    private readonly PlayerBrokerOptions _brokerOptions;
+
+    private readonly ILogger<PlayerMessageConsumer> _logger;
+
+    public PlayerMessageConsumer( GameEngineOptions _gameEngineOptions,PlayerBrokerOptions _brokerOptions,ILogger<PlayerMessageConsumer> _logger)
+    {
+        this._brokerOptions = _brokerOptions;
+        this._logger=_logger;
+        this._gameEngineOptions=_gameEngineOptions;
+        
+    }
+    
+
     private static readonly TimeSpan OwnershipReconcileInterval = TimeSpan.FromSeconds(1);
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -37,7 +50,7 @@ public sealed class PlayerMessageConsumer(
             }
             catch (Exception exception)
             {
-                logger.LogWarning(exception, "Player message consumer failed. Retrying in 5s.");
+                _logger.LogWarning(exception, "Player message consumer failed. Retrying in 5s.");
                 await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
             }
         }
@@ -47,10 +60,10 @@ public sealed class PlayerMessageConsumer(
     {
         var factory = new ConnectionFactory
         {
-            HostName = brokerOptions.HostName,
-            Port = brokerOptions.Port,
-            UserName = brokerOptions.UserName,
-            Password = brokerOptions.Password,
+            HostName = _brokerOptions.HostName,
+            Port = _brokerOptions.Port,
+            UserName = _brokerOptions.UserName,
+            Password = _brokerOptions.Password,
             DispatchConsumersAsync = true
         };
 
@@ -58,7 +71,7 @@ public sealed class PlayerMessageConsumer(
         using var channel = connection.CreateModel();
 
         channel.ExchangeDeclare(
-            exchange: brokerOptions.ExchangeName,
+            exchange: _brokerOptions.ExchangeName,
             type: ExchangeType.Direct,
             durable: true,
             autoDelete: false);
@@ -78,7 +91,7 @@ public sealed class PlayerMessageConsumer(
 
                 if (!long.TryParse(message.TableId, out var tableId))
                 {
-                    logger.LogWarning(
+                    _logger.LogWarning(
                         "Rejecting player message {MessageId} because table id {TableId} is not numeric.",
                         message.MessageId,
                         message.TableId);
@@ -87,11 +100,11 @@ public sealed class PlayerMessageConsumer(
                     return;
                 }
 
-                if (!gameEngineOptions.tokensPerTable.ContainsKey(tableId))
+                if (!_gameEngineOptions.tokensPerTable.ContainsKey(tableId))
                 {
                     // A cancelled consumer may still receive an in-flight delivery. Requeue it so the
                     // current owner gets the message instead of this stale engine acknowledging it.
-                    logger.LogInformation(
+                    _logger.LogInformation(
                         "Requeueing player message {MessageId} for table {TableId} because this engine is no longer the owner.",
                         message.MessageId,
                         tableId);
@@ -100,19 +113,22 @@ public sealed class PlayerMessageConsumer(
                     return;
                 }
 
-                logger.LogInformation(
+                _logger.LogInformation(
                     "GameEngine {EngineId} received {MessageType} for table {TableId}, player {PlayerId}, message {MessageId}.",
-                    gameEngineOptions.EngineId,
+                    _gameEngineOptions.EngineId,
                     message.Type,
                     message.TableId,
                     message.PlayerId,
                     message.MessageId);
 
                 SafeAck(channel, args.DeliveryTag);
+                
+                
+                // Send Event to Game Engine
             }
             catch (Exception exception)
             {
-                logger.LogError(
+                _logger.LogError(
                     exception,
                     "Failed to process player message {MessageId}.",
                     message?.MessageId);
@@ -139,7 +155,7 @@ public sealed class PlayerMessageConsumer(
 
     private void ReconcileTableConsumers(IModel channel, AsyncEventingBasicConsumer consumer)
     {
-        var ownedTableIds = gameEngineOptions.tokensPerTable.Keys.ToHashSet();
+        var ownedTableIds = _gameEngineOptions.tokensPerTable.Keys.ToHashSet();
 
         foreach (var tableId in ownedTableIds)
         {
@@ -179,7 +195,7 @@ public sealed class PlayerMessageConsumer(
             // engine cancels its consumer and the new owner consumes the same durable queue.
             channel.QueueBind(
                 queue: queueName,
-                exchange: brokerOptions.ExchangeName,
+                exchange: _brokerOptions.ExchangeName,
                 routingKey: normalizedTableId);
 
             var consumerTag = channel.BasicConsume(
@@ -190,9 +206,9 @@ public sealed class PlayerMessageConsumer(
             _consumerTagsPerTable[tableId] = consumerTag;
         }
 
-        logger.LogInformation(
+        _logger.LogInformation(
             "Game engine {EngineId} started consuming player messages for table {TableId}.",
-            gameEngineOptions.EngineId,
+            _gameEngineOptions.EngineId,
             tableId);
     }
 
@@ -209,9 +225,9 @@ public sealed class PlayerMessageConsumer(
             _consumerTagsPerTable.Remove(tableId);
         }
 
-        logger.LogInformation(
+        _logger.LogWarning(
             "Game engine {EngineId} stopped consuming player messages for table id {TableId} because ownership was lost.",
-            gameEngineOptions.EngineId,
+            _gameEngineOptions.EngineId,
             tableId);
     }
 

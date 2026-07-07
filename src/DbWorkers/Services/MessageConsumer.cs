@@ -68,12 +68,13 @@ public sealed class DbMessageConsumer (
             {
                 var json = Encoding.UTF8.GetString(args.Body.ToArray());
                 var message = JsonSerializer.Deserialize<DbWorkerMessageEnvelope>(json, JsonOptions) ?? throw new InvalidOperationException("Db Worker message body is empty.");
-                Console.WriteLine(
-                    "GameEngine {0} received {1} for table {2}, player {3}",
+                logger.LogDebug(
+                    "GameEngine {Type} received {RoundId} for table {TableId}, player {MessageId}",
                      message.Type,
                     message.Payload.RoundId,
                     message.Payload.TableId,
                     message.MessageId);
+                
                 channel.BasicAck(args.DeliveryTag, multiple: false);
 
 

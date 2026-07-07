@@ -2,10 +2,10 @@ namespace Crash.Domain.Entities;
 
 public class Round
 {
-    public string Id { get; set; } = null!;
+    public string Id { get; set; }
 
-    public int TableId { get; set; }
-    public Table Table { get; set; } = null!;
+    public long TableId { get; set; }
+    public Table Table { get; set; } 
 
     public string? OwnerId { get; set; }
     public long FencingToken { get; set; }

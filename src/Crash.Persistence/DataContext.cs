@@ -15,14 +15,15 @@ public class DataContext: DbContext
     public DbSet<Table> Tables  => Set<Table>();
     
     
-    public DbSet<Owner> Owners  => Set<Owner>();    
+    public DbSet<Owner> Owners  => Set<Owner>();   
+    public DbSet<AppLog> AppLogs  => Set<AppLog>();
     
     
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Bet>();
         modelBuilder.Entity<Player>();
-        modelBuilder.Entity<Round>();  
+        modelBuilder.Entity<Round>().HasOne(r=>r.Table).WithMany(t=>t.Rounds).HasForeignKey(r=>r.TableId);
         modelBuilder.Entity<Table>();   
         modelBuilder.Entity<Owner>();
 

@@ -14,5 +14,6 @@ public class Table :BaseEntity
 
     public List<Round> Rounds { get; set; } = new();
 
-    
+    public int PlayersCount { get; set; } = 0;
+
 }
