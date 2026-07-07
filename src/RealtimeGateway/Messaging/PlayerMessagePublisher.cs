@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Crash.Domain.Contracts;
+using Crash.Domain.Contracts.Common;
 using Crash.Domain.Options;
 using RabbitMQ.Client;
  
@@ -9,9 +10,16 @@ namespace RealtimeGateway.Messaging;
 
 public interface IPlayerMessagePublisher
 {
-    Task PublishAsync(PlayerMessageEnvelope message, CancellationToken cancellationToken);
+    Task PublishAsync<T>(T message,PublisherOptions configs, CancellationToken cancellationToken);
 }
 
+public sealed record PublisherOptions
+{
+    public string MessageId {get; init;}
+    public string Type {get; init;}
+    public AmqpTimestamp Timestamp {get; init;}
+    public string TableId {get; init;}
+}
 public sealed class PlayerMessagePublisher : IPlayerMessagePublisher, IDisposable
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -29,8 +37,7 @@ public sealed class PlayerMessagePublisher : IPlayerMessagePublisher, IDisposabl
         connection = CreateConnection(options);
         channel = connection.CreateModel();
     }
-
-    public Task PublishAsync(PlayerMessageEnvelope message, CancellationToken cancellationToken)
+     public Task PublishAsync<T>(T message,PublisherOptions configs, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -41,9 +48,9 @@ public sealed class PlayerMessagePublisher : IPlayerMessagePublisher, IDisposabl
             var properties = channel.CreateBasicProperties();
             properties.Persistent = true;
             properties.ContentType = "application/json";
-            properties.MessageId = message.MessageId.ToString();
-            properties.Type = message.Type.ToString();
-            properties.Timestamp = new AmqpTimestamp(message.ReceivedAt.ToUnixTimeSeconds());
+            properties.MessageId = configs.MessageId;
+            properties.Type = configs.Type;
+            properties.Timestamp = configs.Timestamp;// new AmqpTimestamp(message.ReceivedAt.ToUnixTimeSeconds());
 
             channel.ExchangeDeclare(
                 exchange: options.ExchangeName,
@@ -51,19 +58,19 @@ public sealed class PlayerMessagePublisher : IPlayerMessagePublisher, IDisposabl
                 durable: true,
                 autoDelete: false);
             channel.QueueDeclare(
-                queue: GetTableQueueName(message.TableId),
+                queue: GetTableQueueName(configs.TableId),
                 durable: true,
                 exclusive: false,
                 autoDelete: false);
             channel.QueueBind(
-                queue: GetTableQueueName(message.TableId),
+                queue: GetTableQueueName(configs.TableId),
                 exchange: options.ExchangeName,
-                routingKey: message.TableId);
+                routingKey: configs.TableId);
 
             // Use table id as the routing key so the message lands in that table's durable queue.
             channel.BasicPublish(
                 exchange: options.ExchangeName,
-                routingKey: message.TableId,
+                routingKey: configs.TableId,
                 mandatory: false,
                 basicProperties: properties,
                 body: body);

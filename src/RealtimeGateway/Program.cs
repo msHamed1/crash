@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Crash.Domain.Options;
+using Crash.Persistence.Migrations;
 using RealtimeGateway.Dev;
 using RealtimeGateway.Hubs;
 using RealtimeGateway.Messaging;
@@ -42,6 +43,12 @@ builder.Services.AddSingleton(jwtOptions);
 builder.Services.AddSingleton<IJwtConnectionValidator, JwtConnectionValidator>();
 builder.Services.AddSingleton<IPlayerMessagePublisher, PlayerMessagePublisher>();
 
+builder.Logging.AddProvider(
+    new DatabaseLoggerProvider(
+        builder.Services.BuildServiceProvider()
+            .GetRequiredService<IServiceScopeFactory>()
+    )
+);
 var app = builder.Build();
 
 app.UseCors();

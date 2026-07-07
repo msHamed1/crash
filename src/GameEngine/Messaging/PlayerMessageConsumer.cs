@@ -1,7 +1,9 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Crash.Domain.Contracts;
+using Crash.Domain.Contracts.BetMessages;
+using Crash.Domain.Contracts.Consumer;
+using Crash.Domain.Contracts.PlayerMessages;
 using Crash.Domain.Options;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
@@ -81,32 +83,22 @@ public sealed class PlayerMessageConsumer   : BackgroundService
         var consumer = new AsyncEventingBasicConsumer(channel);
         consumer.Received += async (_, args) =>
         {
-            PlayerMessageEnvelope? message = null;
+            MessageHeader? header = null;
 
             try
             {
                 var json = Encoding.UTF8.GetString(args.Body.ToArray());
-                message = JsonSerializer.Deserialize<PlayerMessageEnvelope>(json, JsonOptions)
-                    ?? throw new InvalidOperationException("Player message body is empty.");
+                header = ReadMessageHeader(json);
 
-                if (!long.TryParse(message.TableId, out var tableId))
-                {
-                    _logger.LogWarning(
-                        "Rejecting player message {MessageId} because table id {TableId} is not numeric.",
-                        message.MessageId,
-                        message.TableId);
 
-                    SafeNack(channel, args.DeliveryTag, requeue: false);
-                    return;
-                }
-
+                var tableId = header.TableId;
                 if (!_gameEngineOptions.tokensPerTable.ContainsKey(tableId))
                 {
                     // A cancelled consumer may still receive an in-flight delivery. Requeue it so the
                     // current owner gets the message instead of this stale engine acknowledging it.
                     _logger.LogInformation(
                         "Requeueing player message {MessageId} for table {TableId} because this engine is no longer the owner.",
-                        message.MessageId,
+                        header.MessageType,
                         tableId);
 
                     SafeNack(channel, args.DeliveryTag, requeue: true);
@@ -114,12 +106,13 @@ public sealed class PlayerMessageConsumer   : BackgroundService
                 }
 
                 _logger.LogInformation(
-                    "GameEngine {EngineId} received {MessageType} for table {TableId}, player {PlayerId}, message {MessageId}.",
+                    "GameEngine {EngineId} received {MessageType} for table {TableId}, message {MessageId}.",
                     _gameEngineOptions.EngineId,
-                    message.Type,
-                    message.TableId,
-                    message.PlayerId,
-                    message.MessageId);
+                    header.MessageType,
+                    header.TableId,
+                    header.MessageId);
+
+                await DispatchMessageAsync(header.MessageType, json, stoppingToken);
 
                 SafeAck(channel, args.DeliveryTag);
                 
@@ -130,9 +123,8 @@ public sealed class PlayerMessageConsumer   : BackgroundService
             {
                 _logger.LogError(
                     exception,
-                    "Failed to process player message {MessageId}.",
-                    message?.MessageId);
-
+                    "Failed to process message {MessageId}.",
+                    header?.MessageId);
                 SafeNack(channel, args.DeliveryTag, requeue: true);
             }
 
@@ -258,5 +250,66 @@ public sealed class PlayerMessageConsumer   : BackgroundService
     private static string GetTableQueueName(string tableId)
     {
         return $"table.{tableId}.player-messages";
+    }
+    
+    private static MessageHeader ReadMessageHeader(string json)
+    {
+        return JsonSerializer.Deserialize<MessageHeader>(json, JsonOptions)
+               ?? throw new InvalidOperationException("Message body is empty.");
+    }
+    
+    private async Task DispatchMessageAsync(
+        string messageType,
+        string json,
+        CancellationToken ct)
+    {
+        switch (messageType)
+        {
+            case "place-bet":
+            {
+                var message = JsonSerializer.Deserialize<PlaceBetReqEvent>(json, JsonOptions)
+                              ?? throw new InvalidOperationException("Invalid place-bet message.");
+
+              //  await _gameEngine.PlaceBetAsync(message, ct);
+              
+              _logger.LogInformation("Player {PlayerId} place bet",message.Data.PlayerId);
+
+                break;
+            }
+
+            case "cash-out":
+            {
+                var message = JsonSerializer.Deserialize<CashoutBetEvent>(json, JsonOptions)
+                              ?? throw new InvalidOperationException("Invalid cash-out message.");
+
+              //  await _gameEngine.CashOutAsync(message, ct);
+              _logger.LogInformation("Player {PlayerId} cash out",message.Data.PlayerId);
+
+                break;
+            }
+
+            case "player-joined":
+            {
+                var message = JsonSerializer.Deserialize<PlayerJoinedEvent>(json, JsonOptions)
+                              ?? throw new InvalidOperationException("Invalid player-joined message.");
+
+             //   await _gameEngine.PlayerJoinedAsync(message, ct);
+             _logger.LogInformation("Player {PlayerId} Joined the table {TableId}",message.Data.PlayerId,message.TableId);
+                break;
+            }
+
+            case "player-left":
+            {
+                var message = JsonSerializer.Deserialize<PlayerLeftEvent>(json, JsonOptions)
+                              ?? throw new InvalidOperationException("Invalid player-left message.");
+
+                _logger.LogInformation("Player {PlayerId} Left the table {TableId}",message.Data.PlayerId,message.TableId);
+             //   await _gameEngine.PlayerLeftAsync(message, ct);
+                break;
+            }
+
+            default:
+                throw new InvalidOperationException($"Unsupported message type: {messageType}");
+        }
     }
 }

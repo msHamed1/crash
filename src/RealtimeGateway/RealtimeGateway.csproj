@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Crash.Domain\Crash.Domain.csproj" />
+    <ProjectReference Include="..\Crash.Persistence\Crash.Persistence.csproj" />
   </ItemGroup>
 
 </Project>

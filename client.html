@@ -213,13 +213,17 @@
       }
 
       const message = {
-        type: "bet",
+        correlationId: "new-"+ String(Date.now()),
+        clientSentAtUtc: new Date().toISOString(),
+        roundId: String(Date.now()),
         amount: Number(getValue("amount")),
         currency: getValue("currency"),
-        autoCashOut: Number(getValue("autoCashOut"))
+        autoCashoutEnabled: true,
+        autoCashoutAt: Number(getValue("autoCashOut"))
+        
       };
 
-      await connection.invoke("SendMessage", message);
+      await connection.invoke("Bet", message);
       appendLog("sent bet", message);
     }
 
