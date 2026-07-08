@@ -8,4 +8,6 @@ public class AppLog
     public string Message {set;get;} = null!;
     public string Category {set;get;} = null!;
     public string? Exception {set;get;}
+    
+    public string? Data { get; set; }
 }

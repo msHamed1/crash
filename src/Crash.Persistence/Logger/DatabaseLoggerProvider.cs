@@ -1,7 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace Crash.Persistence.Migrations;
+namespace Crash.Persistence.Logger;
 
 public class DatabaseLoggerProvider:ILoggerProvider
 {

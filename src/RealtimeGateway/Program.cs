@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Crash.Domain.Options;
-using Crash.Persistence.Migrations;
+using Crash.Persistence.Logger;
 using RealtimeGateway.Dev;
 using RealtimeGateway.Hubs;
 using RealtimeGateway.Messaging;

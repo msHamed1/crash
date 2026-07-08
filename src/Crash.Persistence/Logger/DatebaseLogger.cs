@@ -1,8 +1,9 @@
+using System.Text.Json;
 using Crash.Domain.Entities;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace Crash.Persistence.Migrations;
+namespace Crash.Persistence.Logger;
 
 public sealed class DatebaseLogger :ILogger
 {
@@ -16,14 +17,32 @@ public sealed class DatebaseLogger :ILogger
         _scopeFactory = scopeFactory;
     }
     
-    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+    public void  Log<TState>(
+        LogLevel logLevel,
+        EventId eventId,
+        TState state,
+        Exception? exception,
+        Func<TState, Exception?, string> formatter)
     {
         if (!IsEnabled(logLevel)) return;
         
         var message = formatter(state, exception);
+        string? data = null;
+
         
         try
         {
+            if (state is IEnumerable<KeyValuePair<string, object?>> values)
+            {
+                var obj = values
+                    .Where(x => x.Key != "{OriginalFormat}")
+                    .ToDictionary(x => x.Key, x => x.Value);
+
+                if (obj.Count > 0)
+                {
+                    data = JsonSerializer.Serialize(obj);
+                }
+            }
             using var scope = _scopeFactory.CreateScope();
 
             var db = scope.ServiceProvider.GetRequiredService<DataContext>();
@@ -34,6 +53,7 @@ public sealed class DatebaseLogger :ILogger
                 Message = message,
                 Exception = exception?.ToString(),
                 Level = logLevel.ToString(),
+                Data = data,
             });
             db.SaveChanges();
         }

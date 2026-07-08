@@ -1,5 +1,6 @@
 using Crash.Domain.Contracts;
 using Crash.Domain.Contracts.BetMessages;
+using Crash.Domain.Contracts.PlayerMessages;
 using Microsoft.AspNetCore.SignalR;
 using RabbitMQ.Client;
 using RealtimeGateway.Messaging;
@@ -13,7 +14,7 @@ public sealed class PlayerHub(
 {
     private const string ConnectionContextKey = "player-context";
 
-    public override Task OnConnectedAsync()
+    public  override Task OnConnectedAsync()
     {
         // The connection identity is fixed at connect time and comes from the signed JWT, not from client messages.
         var playerContext= jwtConnectionValidator.Validate(Context);
@@ -29,7 +30,31 @@ public sealed class PlayerHub(
         // Add Player to the Group (Table Group)
         Groups.AddToGroupAsync(Context.ConnectionId, playerContext.TableId);
         
+        var now = DateTime.UtcNow;
+        var correlationId =  Guid.NewGuid().ToString();
+        var envelope = new PlayerJoinedEvent
+        {
+            CorrelationId = correlationId,
+            CreatedAtUtc = now,
+            TableId = GetTableGroup(playerContext.TableId),
+            ProcessedAtGatewayUtc = now,
+            ProcessedAtClientUtc = now,
+            Data = new PlayerJoinedData
+            {
+               
+                PlayerId = playerContext.PlayerId,
+                PlayerCode = playerContext.nickname
+                 
+            }
+        };
         
+          publisher.PublishAsync(envelope,new PublisherOptions
+        {
+            TableId = playerContext.TableId,
+            Timestamp =  new AmqpTimestamp( DateTimeOffset.UtcNow.ToUnixTimeSeconds()),
+            MessageId = envelope.CorrelationId,
+            Type =  envelope.MessageType,
+        }, Context.ConnectionAborted);
         
         return base.OnConnectedAsync();
     }

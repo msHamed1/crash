@@ -1,7 +1,7 @@
 using Crash.Domain.Options;
 using Crash.Rng;
 using Crash.Persistence;
-using Crash.Persistence.Migrations;
+using Crash.Persistence.Logger;
 using GameEngine.Messaging;
 using GameEngine.Repository;
 using GameEngine.Seeders;
@@ -30,10 +30,15 @@ builder.Services.AddSingleton(dbWorkerBrokerOptions);
 
 builder.Services.AddSingleton(playerBrokerOptions);
 builder.Services.AddSingleton(gameEngineOptions);
+builder.Services.AddSingleton<RoundsService>();
 builder.Services.AddSingleton<IDbWorkerMessagePublisher, DbWorkerMessagePublisher>();
 builder.Services.AddSingleton<RoundEngine>();
 builder.Services.AddHostedService<PlayerMessageConsumer>();
 builder.Services.AddHostedService<Core>();
+builder.Services.AddSingleton<RoundsTicker>();
+builder.Services.AddHostedService<RoundsTicker>();
+builder.Services.AddHostedService<RoundsService>();
+
 
 // Seeders 
 builder.Services.AddScoped<IDatabaseSeeder, TablesSeeder>();

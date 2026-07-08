@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.SignalR;
  
 namespace RealtimeGateway.Hubs;
 
-public sealed record PlayerConnectionContext(string TableId, string PlayerId);
+public sealed record PlayerConnectionContext(string TableId, string PlayerId,string nickname);
 
 public interface IJwtConnectionValidator
 {
@@ -23,8 +23,8 @@ public sealed class JwtConnectionValidator(JwtOptions options) : IJwtConnectionV
         var payload = ValidateToken(token);
         var tableId = GetRequiredClaim(payload, "table_id", "tableId");
         var playerId = GetRequiredClaim(payload, "player_id", "playerId");
-
-        return new PlayerConnectionContext(tableId, playerId);
+        var nickname = GetRequiredClaim(payload, "name", "nickname");
+        return new PlayerConnectionContext(tableId, playerId,nickname);
     }
 
     private JsonElement ValidateToken(string token)
