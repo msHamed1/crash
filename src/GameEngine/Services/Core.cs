@@ -1,5 +1,6 @@
 using Crash.Domain.Entities;
 using Crash.Domain.Options;
+using Crash.Domain.State;
 using GameEngine.Repository;
 
 namespace GameEngine.Services;
@@ -59,14 +60,14 @@ public class Core:BackgroundService
         var tableRepository = scope.ServiceProvider
             .GetRequiredService<ITableRepository>();
 
-        foreach (var table in _options.tokensPerTable)
+        foreach (var table in _options.Tables)
         {
             try
             {
                 var tableEntity = await tableRepository.RenewOwnership(
                     table.Key,
                     _options.OwnerId,
-                    table.Value,
+                    table.Value.FencingToken,
                     ct);
 
                 if (tableEntity is null)
@@ -74,7 +75,7 @@ public class Core:BackgroundService
                     // Renewal failed, so this engine must stop treating the table as owned.
                     // PlayerMessageConsumer watches this shared dictionary and cancels the
                     // RabbitMQ consumer for the table on its next reconciliation tick.
-                    _options.tokensPerTable.TryRemove(table.Key, out _);
+                    _options.Tables.TryRemove(table.Key, out _);
                     _logger.LogWarning(
                         "Game engine {EngineId} lost ownership for table {TableId}.",
                         _options.EngineId,
@@ -84,7 +85,8 @@ public class Core:BackgroundService
 
                 // Always overwrite the local fencing token with the DB-confirmed value.
                 // If another engine won the lease race, RenewOwnership returns null instead.
-                _options.tokensPerTable[tableEntity.Id] = tableEntity.FencingToken;
+                _options.Tables[tableEntity.Id] = new TableRuntimeState(tableEntity.Id);
+                _options.Tables[tableEntity.Id].SetFencingToken(tableEntity.FencingToken);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -102,7 +104,9 @@ public class Core:BackgroundService
         {
             // Adding the table here is enough for PlayerMessageConsumer to start consuming
             // the durable table queue without restarting this process.
-            _options.tokensPerTable[newTable.Id] = newTable.FencingToken;
+            _options.Tables[newTable.Id] = new TableRuntimeState(newTable.Id);
+            _options.Tables[newTable.Id].SetFencingToken(newTable.FencingToken);
+
             _logger.LogInformation(
                 "Game engine {EngineId} acquired ownership for table {TableId} with fencing token {FencingToken}.",
                 _options.EngineId,

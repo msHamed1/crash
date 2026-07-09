@@ -2,9 +2,11 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Crash.Domain.Contracts.BetMessages;
+using Crash.Domain.Contracts.Commands;
 using Crash.Domain.Contracts.Consumer;
 using Crash.Domain.Contracts.PlayerMessages;
 using Crash.Domain.Options;
+using GameEngine.Services;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 
@@ -18,13 +20,15 @@ public sealed class PlayerMessageConsumer   : BackgroundService
     private readonly PlayerBrokerOptions _brokerOptions;
 
     private readonly ILogger<PlayerMessageConsumer> _logger;
+    private readonly RoundsService  _roundsService;
 
-    public PlayerMessageConsumer( GameEngineOptions _gameEngineOptions,PlayerBrokerOptions _brokerOptions,ILogger<PlayerMessageConsumer> _logger)
+    public PlayerMessageConsumer(RoundsService roundsService , GameEngineOptions gameEngineOptions,PlayerBrokerOptions brokerOptions,ILogger<PlayerMessageConsumer> logger)
     {
-        this._brokerOptions = _brokerOptions;
-        this._logger=_logger;
-        this._gameEngineOptions=_gameEngineOptions;
-        
+       _brokerOptions = brokerOptions;
+        _logger=logger;
+       _gameEngineOptions=gameEngineOptions;
+       _roundsService = roundsService;
+
     }
     
 
@@ -92,7 +96,7 @@ public sealed class PlayerMessageConsumer   : BackgroundService
 
 
                 var tableId = header.TableId;
-                if (!_gameEngineOptions.tokensPerTable.ContainsKey(tableId))
+                if (!_gameEngineOptions.Tables.ContainsKey(tableId))
                 {
                     // A cancelled consumer may still receive an in-flight delivery. Requeue it so the
                     // current owner gets the message instead of this stale engine acknowledging it.
@@ -147,7 +151,7 @@ public sealed class PlayerMessageConsumer   : BackgroundService
 
     private void ReconcileTableConsumers(IModel channel, AsyncEventingBasicConsumer consumer)
     {
-        var ownedTableIds = _gameEngineOptions.tokensPerTable.Keys.ToHashSet();
+        var ownedTableIds = _gameEngineOptions.Tables.Keys.ToHashSet();
 
         foreach (var tableId in ownedTableIds)
         {
@@ -295,6 +299,13 @@ public sealed class PlayerMessageConsumer   : BackgroundService
 
              //   await _gameEngine.PlayerJoinedAsync(message, ct);
              _logger.LogInformation("Player {PlayerId} Joined the table {TableId}",message.Data.PlayerId,message.TableId);
+
+             var envelop = new PlayerJoinedCommand 
+             {
+                 TableId = message.TableId.ToString(),
+                 PlayerId = message.Data.PlayerId,
+             };
+             await _roundsService.EnqueueAsync(envelop, ct);
                 break;
             }
 

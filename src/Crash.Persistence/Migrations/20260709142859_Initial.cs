@@ -29,6 +29,8 @@ namespace Crash.Persistence.Migrations
                     Category = table.Column<string>(type: "longtext", nullable: false)
                         .Annotation("MySql:CharSet", "utf8mb4"),
                     Exception = table.Column<string>(type: "longtext", nullable: true)
+                        .Annotation("MySql:CharSet", "utf8mb4"),
+                    Data = table.Column<string>(type: "longtext", nullable: true)
                         .Annotation("MySql:CharSet", "utf8mb4")
                 },
                 constraints: table =>
@@ -63,6 +65,8 @@ namespace Crash.Persistence.Migrations
                     OwnerId = table.Column<long>(type: "bigint", nullable: true),
                     FencingToken = table.Column<long>(type: "bigint", nullable: false),
                     LeaseExpiresAt = table.Column<DateTimeOffset>(type: "datetime(6)", nullable: true),
+                    PlayersCount = table.Column<int>(type: "int", nullable: false),
+                    NextNonce = table.Column<ulong>(type: "bigint unsigned", nullable: false),
                     CreatedAt = table.Column<DateTimeOffset>(type: "datetime(6)", nullable: false, defaultValueSql: "CURRENT_TIMESTAMP(6)"),
                     UpdatedAt = table.Column<DateTimeOffset>(type: "datetime(6)", nullable: true)
                 },
@@ -81,13 +85,16 @@ namespace Crash.Persistence.Migrations
                 name: "Rounds",
                 columns: table => new
                 {
-                    Id = table.Column<string>(type: "varchar(255)", nullable: false)
-                        .Annotation("MySql:CharSet", "utf8mb4"),
+                    Id = table.Column<long>(type: "bigint", nullable: false)
+                        .Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
                     TableId = table.Column<long>(type: "bigint", nullable: false),
-                    OwnerId = table.Column<string>(type: "longtext", nullable: true)
-                        .Annotation("MySql:CharSet", "utf8mb4"),
+                    OwnerId = table.Column<long>(type: "bigint", nullable: true),
                     FencingToken = table.Column<long>(type: "bigint", nullable: false),
                     LeaseExpiresAt = table.Column<DateTimeOffset>(type: "datetime(6)", nullable: false),
+                    Nonce = table.Column<ulong>(type: "bigint unsigned", nullable: false),
+                    CrashPoints = table.Column<decimal>(type: "decimal(65,30)", nullable: true),
+                    RngId = table.Column<string>(type: "longtext", nullable: true)
+                        .Annotation("MySql:CharSet", "utf8mb4"),
                     Status = table.Column<int>(type: "int", nullable: false),
                     StartTime = table.Column<DateTimeOffset>(type: "datetime(6)", nullable: false),
                     EndTime = table.Column<DateTimeOffset>(type: "datetime(6)", nullable: true),
@@ -110,13 +117,15 @@ namespace Crash.Persistence.Migrations
                 name: "Players",
                 columns: table => new
                 {
-                    Id = table.Column<int>(type: "int", nullable: false)
+                    Id = table.Column<long>(type: "bigint", nullable: false)
                         .Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
                     ExternalId = table.Column<string>(type: "longtext", nullable: false)
                         .Annotation("MySql:CharSet", "utf8mb4"),
-                    Balance = table.Column<decimal>(type: "decimal(65,30)", nullable: false),
-                    RoundId = table.Column<string>(type: "varchar(255)", nullable: true)
-                        .Annotation("MySql:CharSet", "utf8mb4")
+                    Type = table.Column<string>(type: "longtext", nullable: false)
+                        .Annotation("MySql:CharSet", "utf8mb4"),
+                    BalanceInUSD = table.Column<decimal>(type: "decimal(65,30)", nullable: false),
+                    TableId = table.Column<long>(type: "bigint", nullable: true),
+                    RoundId = table.Column<long>(type: "bigint", nullable: true)
                 },
                 constraints: table =>
                 {
@@ -125,6 +134,11 @@ namespace Crash.Persistence.Migrations
                         name: "FK_Players_Rounds_RoundId",
                         column: x => x.RoundId,
                         principalTable: "Rounds",
+                        principalColumn: "Id");
+                    table.ForeignKey(
+                        name: "FK_Players_Tables_TableId",
+                        column: x => x.TableId,
+                        principalTable: "Tables",
                         principalColumn: "Id");
                 })
                 .Annotation("MySql:CharSet", "utf8mb4");
@@ -135,7 +149,7 @@ namespace Crash.Persistence.Migrations
                 {
                     Id = table.Column<int>(type: "int", nullable: false)
                         .Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
-                    PlayerId = table.Column<int>(type: "int", nullable: false),
+                    PlayerId = table.Column<long>(type: "bigint", nullable: false),
                     Amount = table.Column<int>(type: "int", nullable: false),
                     Currency = table.Column<string>(type: "longtext", nullable: false)
                         .Annotation("MySql:CharSet", "utf8mb4"),
@@ -143,8 +157,7 @@ namespace Crash.Persistence.Migrations
                     SettledAt = table.Column<DateTime>(type: "datetime(6)", nullable: true),
                     Status = table.Column<string>(type: "longtext", nullable: false)
                         .Annotation("MySql:CharSet", "utf8mb4"),
-                    RoundId = table.Column<string>(type: "varchar(255)", nullable: false)
-                        .Annotation("MySql:CharSet", "utf8mb4")
+                    RoundId = table.Column<long>(type: "bigint", nullable: false)
                 },
                 constraints: table =>
                 {
@@ -178,6 +191,11 @@ namespace Crash.Persistence.Migrations
                 name: "IX_Players_RoundId",
                 table: "Players",
                 column: "RoundId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Players_TableId",
+                table: "Players",
+                column: "TableId");
 
             migrationBuilder.CreateIndex(
                 name: "IX_Rounds_TableId",

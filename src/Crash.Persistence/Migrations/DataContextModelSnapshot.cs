@@ -74,12 +74,11 @@ namespace Crash.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("longtext");
 
-                    b.Property<int>("PlayerId")
-                        .HasColumnType("int");
+                    b.Property<long>("PlayerId")
+                        .HasColumnType("bigint");
 
-                    b.Property<string>("RoundId")
-                        .IsRequired()
-                        .HasColumnType("varchar(255)");
+                    b.Property<long>("RoundId")
+                        .HasColumnType("bigint");
 
                     b.Property<DateTime?>("SettledAt")
                         .HasColumnType("datetime(6)");
@@ -116,33 +115,48 @@ namespace Crash.Persistence.Migrations
 
             modelBuilder.Entity("Crash.Domain.Entities.Player", b =>
                 {
-                    b.Property<int>("Id")
+                    b.Property<long>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
+                        .HasColumnType("bigint");
 
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<long>("Id"));
 
-                    b.Property<decimal>("Balance")
+                    b.Property<decimal>("BalanceInUSD")
                         .HasColumnType("decimal(65,30)");
 
                     b.Property<string>("ExternalId")
                         .IsRequired()
                         .HasColumnType("longtext");
 
-                    b.Property<string>("RoundId")
-                        .HasColumnType("varchar(255)");
+                    b.Property<long?>("RoundId")
+                        .HasColumnType("bigint");
+
+                    b.Property<long?>("TableId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasColumnType("longtext");
 
                     b.HasKey("Id");
 
                     b.HasIndex("RoundId");
+
+                    b.HasIndex("TableId");
 
                     b.ToTable("Players");
                 });
 
             modelBuilder.Entity("Crash.Domain.Entities.Round", b =>
                 {
-                    b.Property<string>("Id")
-                        .HasColumnType("varchar(255)");
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<decimal?>("CrashPoints")
+                        .HasColumnType("decimal(65,30)");
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("datetime(6)");
@@ -156,7 +170,13 @@ namespace Crash.Persistence.Migrations
                     b.Property<DateTimeOffset>("LeaseExpiresAt")
                         .HasColumnType("datetime(6)");
 
-                    b.Property<string>("OwnerId")
+                    b.Property<ulong>("Nonce")
+                        .HasColumnType("bigint unsigned");
+
+                    b.Property<long?>("OwnerId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("RngId")
                         .HasColumnType("longtext");
 
                     b.Property<DateTimeOffset>("StartTime")
@@ -196,6 +216,9 @@ namespace Crash.Persistence.Migrations
 
                     b.Property<DateTimeOffset?>("LeaseExpiresAt")
                         .HasColumnType("datetime(6)");
+
+                    b.Property<ulong>("NextNonce")
+                        .HasColumnType("bigint unsigned");
 
                     b.Property<long?>("OwnerId")
                         .HasColumnType("bigint");
@@ -241,6 +264,10 @@ namespace Crash.Persistence.Migrations
                     b.HasOne("Crash.Domain.Entities.Round", null)
                         .WithMany("Players")
                         .HasForeignKey("RoundId");
+
+                    b.HasOne("Crash.Domain.Entities.Table", null)
+                        .WithMany("Players")
+                        .HasForeignKey("TableId");
                 });
 
             modelBuilder.Entity("Crash.Domain.Entities.Round", b =>
@@ -277,6 +304,8 @@ namespace Crash.Persistence.Migrations
 
             modelBuilder.Entity("Crash.Domain.Entities.Table", b =>
                 {
+                    b.Navigation("Players");
+
                     b.Navigation("Rounds");
                 });
 #pragma warning restore 612, 618

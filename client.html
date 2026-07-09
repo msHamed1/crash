@@ -171,14 +171,12 @@
       const gatewayApi = getValue("gatewayApi").replace(/\/$/, "");
       setStatus("requesting connection");
 
-      const response = await fetch(`${gatewayApi}/dev/connections`, {
+      const response = await fetch(`${gatewayApi}/api/players/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: getValue("name"),
-          username: getValue("username"),
-          tableId: getValue("tableId")
-        })
+           username: getValue("username"),
+         })
       });
 
       if (!response.ok) {
@@ -189,8 +187,8 @@
       appendLog("connection info", connectionInfo);
 
       connection = new signalR.HubConnectionBuilder()
-        .withUrl(connectionInfo.hubUrl, {
-          accessTokenFactory: () => connectionInfo.accessToken
+        .withUrl(connectionInfo.HubUrl, {
+          accessTokenFactory: () => connectionInfo.Token
         })
         .withAutomaticReconnect()
         .build();

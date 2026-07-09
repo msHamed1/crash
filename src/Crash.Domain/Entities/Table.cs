@@ -13,7 +13,10 @@ public class Table :BaseEntity
     public DateTimeOffset? LeaseExpiresAt { get; set; }
 
     public List<Round> Rounds { get; set; } = new();
+    public List<Player> Players { get; set; } = new();
 
     public int PlayersCount { get; set; } = 0;
+    public ulong NextNonce { get; set; } = 1;
+
 
 }

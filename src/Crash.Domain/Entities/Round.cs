@@ -2,14 +2,18 @@ namespace Crash.Domain.Entities;
 
 public class Round
 {
-    public string Id { get; set; }
+    public long Id { get; set; }
 
     public long TableId { get; set; }
     public Table Table { get; set; } 
 
-    public string? OwnerId { get; set; }
+    public long? OwnerId { get; set; }
     public long FencingToken { get; set; }
     public DateTimeOffset LeaseExpiresAt { get; set; }
+    
+    public ulong Nonce { get; set; }
+    public decimal? CrashPoints  { get; set; }
+    public string? RngId  { get; set; }
 
     public RoundStatus Status { get; set; }
 

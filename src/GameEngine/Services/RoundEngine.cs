@@ -17,7 +17,7 @@ public sealed record StartedRoundResponse(
     string ClientSeed,
     ulong Nonce,
     string RngAlgorithmVersion,
-    double CrashPoint,
+    decimal CrashPoint,
     DateTimeOffset CreatedAt);
 
 public sealed class RoundEngine(Rng.RngClient rngClient)
@@ -56,7 +56,7 @@ public sealed class RoundEngine(Rng.RngClient rngClient)
             entropy.ClientSeed,
             entropy.Nonce,
             entropy.RngAlgorithmVersion,
-            entropy.CrashPoint,
+            (decimal) entropy.CrashPoint,
             DateTimeOffset.FromUnixTimeMilliseconds(entropy.CreatedAtUnixMs));
     }
 }

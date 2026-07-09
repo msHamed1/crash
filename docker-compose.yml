@@ -75,10 +75,13 @@ services:
       Broker__UserName: crash
       Broker__Password: crash_password
       Broker__ExchangeName: crash.player-messages
+      MySql__ConnectionString: Server=mysql;Port=3306;Database=crash_game;User=crash;Password=crash_password;
       Jwt__SigningKey: local-dev-signalr-jwt-signing-key-change-me
     ports:
       - "5003:8080"
     depends_on:
+      mysql:
+        condition: service_healthy
       rabbitmq:
         condition: service_healthy
 

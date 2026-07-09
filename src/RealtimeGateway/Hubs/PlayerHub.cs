@@ -3,6 +3,7 @@ using Crash.Domain.Contracts.BetMessages;
 using Crash.Domain.Contracts.PlayerMessages;
 using Microsoft.AspNetCore.SignalR;
 using RabbitMQ.Client;
+using RealtimeGateway.Jwt;
 using RealtimeGateway.Messaging;
 
 namespace RealtimeGateway.Hubs;
@@ -14,10 +15,10 @@ public sealed class PlayerHub(
 {
     private const string ConnectionContextKey = "player-context";
 
-    public  override Task OnConnectedAsync()
+    public override async Task OnConnectedAsync()
     {
         // The connection identity is fixed at connect time and comes from the signed JWT, not from client messages.
-        var playerContext= jwtConnectionValidator.Validate(Context);
+        var playerContext = jwtConnectionValidator.Validate(Context);
         Context.Items[ConnectionContextKey] = playerContext;
         
         _logger.LogInformation(
@@ -28,7 +29,7 @@ public sealed class PlayerHub(
         
         
         // Add Player to the Group (Table Group)
-        Groups.AddToGroupAsync(Context.ConnectionId, playerContext.TableId);
+        await Groups.AddToGroupAsync(Context.ConnectionId, playerContext.TableId);
         
         var now = DateTime.UtcNow;
         var correlationId =  Guid.NewGuid().ToString();
@@ -43,12 +44,12 @@ public sealed class PlayerHub(
             {
                
                 PlayerId = playerContext.PlayerId,
-                PlayerCode = playerContext.nickname
+                PlayerCode = playerContext.ExternalId
                  
             }
         };
         
-          publisher.PublishAsync(envelope,new PublisherOptions
+        await publisher.PublishAsync(envelope,new PublisherOptions
         {
             TableId = playerContext.TableId,
             Timestamp =  new AmqpTimestamp( DateTimeOffset.UtcNow.ToUnixTimeSeconds()),
@@ -56,7 +57,7 @@ public sealed class PlayerHub(
             Type =  envelope.MessageType,
         }, Context.ConnectionAborted);
         
-        return base.OnConnectedAsync();
+        await base.OnConnectedAsync();
     }
     
     public override async Task OnDisconnectedAsync(Exception? exception)

@@ -1,10 +1,6 @@
-namespace RealtimeGateway.Dev;
+namespace RealtimeGateway.Jwt;
 
-public sealed record DevConnectionRequest(
-    string? Name,
-    string? Username,
-    string? TableId);
-
+ 
 public sealed record DevConnectionResponse(
     string HubUrl,
     string AccessToken,

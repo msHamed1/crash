@@ -35,6 +35,11 @@ public interface ITableRepository
         long ownerId,
         long fencingToken,
         CancellationToken ct);
+    
+    Task<Table> GetOrCreateTableForPlayer(Player player, CancellationToken ct);
+    
+    
+    
 }
 public class TableRepository:ITableRepository 
 {
@@ -125,5 +130,68 @@ public class TableRepository:ITableRepository
         
         var table= await _db.Tables.Where(p=>p.OwnerId == ownerId && p.FencingToken == fencingToken).FirstAsync(ct) ;
         return table != null;
+    }
+
+    public async Task<Table> GetOrCreateTableForPlayer(Player player, CancellationToken ct)
+    {
+        // We need tp reserve seat in table atomically;
+        // 1. Try to find an active table with free seat
+        // 2. Safely increment PlayersCount
+        // 3. If no table found, create a new table
+        // 4. Add player to table
+        // 5. Return table;
+        const int maxPlayers = 2;
+        var now = DateTimeOffset.UtcNow;
+
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+
+            var tableId = await _db.Tables
+                .Where(t => t.PlayersCount < maxPlayers /* && t.Status == TableStatus.Open */)
+                .OrderByDescending(t => t.PlayersCount)
+                .Select(t => t.Id)
+                .FirstOrDefaultAsync(ct);
+
+            if (tableId == 0)
+            {
+                var newTable = new Table
+                {
+                    PlayersCount = 1,
+                    CreatedAt = now,
+                    Players = new List<Player> { player }
+                };
+
+                _db.Tables.Add(newTable);
+                await _db.SaveChangesAsync(ct);
+                await transaction.CommitAsync(ct);
+
+                return newTable;
+            }
+
+            var updatedRows = await _db.Tables
+                .Where(t => t.Id == tableId && t.PlayersCount < maxPlayers /* && t.Status == TableStatus.Open */)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(t => t.PlayersCount, t => t.PlayersCount + 1)
+                    .SetProperty(t => t.UpdatedAt, now), ct);
+
+            if (updatedRows == 0)
+            {
+                await transaction.RollbackAsync(ct);
+                continue;
+            }
+
+            player.TableId = tableId;
+
+            await _db.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
+
+            return await _db.Tables
+                .AsNoTracking()
+                .Include(t => t.Players)
+                .FirstAsync(t => t.Id == tableId, ct);
+        }
+
+        throw new InvalidOperationException("Could not reserve a table seat after retries.");
     }
 }

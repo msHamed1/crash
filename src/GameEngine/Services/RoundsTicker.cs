@@ -36,14 +36,20 @@ public sealed class RoundsTicker:BackgroundService
 
     private async Task SendCrashEvent(RoundTickMap roundTickMap)
     {
-        var envelop = new RoundCrashCommand(roundTickMap.CurrentTick
-        )
+        var envelop = new RoundCrashCommand
         {
+            CurrentMultiplier = roundTickMap.CurrentTick,
             RoundId = roundTickMap.RoundId,
             TableId = roundTickMap.TableId,
 
         };
-       await this._roundsService.EnqueueAsync(envelop);
+       await _roundsService.EnqueueAsync(envelop);
+
+       var newRoundCommand = new NewRoundCommand()
+       {
+           TableId = roundTickMap.TableId,
+       };
+       await _roundsService.EnqueueAsync(newRoundCommand);
        
         
     }
@@ -51,9 +57,10 @@ public sealed class RoundsTicker:BackgroundService
     
     private async Task SendTickEvent(RoundTickMap roundTickMap)
     {
-        var envelop = new RoundTickCommand(roundTickMap.CurrentTick
-        )
+        var envelop = new RoundTickCommand 
         {
+            CurrentMultiplier = roundTickMap.CurrentTick,
+
             RoundId = roundTickMap.RoundId,
             TableId = roundTickMap.TableId,
 
