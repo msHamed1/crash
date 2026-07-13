@@ -8,6 +8,8 @@ public interface IPlayerRepository
 {
   public  Task<Player?> GetPlayerByUsername(string username, CancellationToken ct);
   public  Task<Player?> Create(string username, CancellationToken ct);
+  
+  public Task<Player?> GetById(long Id, CancellationToken ct);
 
 }
 public class PlayerRepository(DataContext db) : IPlayerRepository
@@ -17,7 +19,12 @@ public class PlayerRepository(DataContext db) : IPlayerRepository
         return  await db.Players.Where(p=>p.ExternalId==username).FirstOrDefaultAsync(ct);
         
     }
-    
+
+    public async Task<Player?> GetById(long Id, CancellationToken ct)
+    {
+        return  await db.Players.Where(p=>p.Id==Id).FirstOrDefaultAsync(ct);
+
+    }
     public async Task<Player?> Create(string username, CancellationToken ct)
     {
 

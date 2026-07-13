@@ -159,6 +159,7 @@ public class TableRepository:ITableRepository
                 {
                     PlayersCount = 1,
                     CreatedAt = now,
+                    TableName = "Crash table",
                     Players = new List<Player> { player }
                 };
 

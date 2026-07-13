@@ -62,6 +62,7 @@ public class RoundRepository:IRoundRepository
                 OwnerId = table.OwnerId,
                 Table = table,
                 FencingToken = table.FencingToken,
+                 StartTime =   DateTimeOffset.UtcNow.AddSeconds(6),
             };
             _db.Rounds.Add(round);
             await _db.SaveChangesAsync(ct);

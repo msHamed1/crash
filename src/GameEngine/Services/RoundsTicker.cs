@@ -1,23 +1,14 @@
 using Crash.Domain.Contracts.Commands;
 using Crash.Domain.Options;
+using Crash.Domain.State;
 
 namespace GameEngine.Services;
 
-public sealed class RoundTickMap
-{
-   public string RoundId  { get; init; } 
-   public  string TableId  { get; init; } 
-   public  decimal CurrentTick  { get; set; } 
-   public decimal MaxTick  { get; init; } 
-   public decimal MinTick  { get; init; } 
-   public DateTimeOffset StartsAt { get; init; }
-   
-}
+ 
 public sealed class RoundsTicker:BackgroundService
 {
     
     private readonly ILogger<RoundsTicker> _logger;
-    private Dictionary<string, RoundTickMap> _rounds = new();
     private static readonly TimeSpan TickInterval = TimeSpan.FromMilliseconds(50);
 
     private readonly GameEngineOptions _options;
@@ -34,20 +25,20 @@ public sealed class RoundsTicker:BackgroundService
 
     }
 
-    private async Task SendCrashEvent(RoundTickMap roundTickMap)
+    private async Task SendCrashEvent(RoundRuntimeState roundTickMap,long TableId)
     {
         var envelop = new RoundCrashCommand
         {
-            CurrentMultiplier = roundTickMap.CurrentTick,
-            RoundId = roundTickMap.RoundId,
-            TableId = roundTickMap.TableId,
+            CurrentMultiplier = roundTickMap.CurrentMultiplier,
+            RoundId = roundTickMap.RoundId.ToString(),
+            TableId = TableId.ToString(),
 
         };
        await _roundsService.EnqueueAsync(envelop);
 
        var newRoundCommand = new NewRoundCommand()
        {
-           TableId = roundTickMap.TableId,
+           TableId =TableId.ToString(),
        };
        await _roundsService.EnqueueAsync(newRoundCommand);
        
@@ -55,14 +46,13 @@ public sealed class RoundsTicker:BackgroundService
     }
     
     
-    private async Task SendTickEvent(RoundTickMap roundTickMap)
+    private async Task SendTickEvent(RoundRuntimeState roundTickMap,long TableId)
     {
         var envelop = new RoundTickCommand 
         {
-            CurrentMultiplier = roundTickMap.CurrentTick,
-
-            RoundId = roundTickMap.RoundId,
-            TableId = roundTickMap.TableId,
+            CurrentMultiplier = roundTickMap.CurrentMultiplier,
+            RoundId = roundTickMap.RoundId.ToString(),
+            TableId =TableId.ToString() ,
 
         };
         await _roundsService.EnqueueAsync(envelop);
@@ -70,47 +60,44 @@ public sealed class RoundsTicker:BackgroundService
         
     }
 
-    public void AddNewRound(RoundTickMap roundTickMap)
-    {
-        lock (_lock)
-        {
-            _rounds[roundTickMap.RoundId] = roundTickMap;
-        }
-    }
+  
     
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
         {
-            List<RoundTickMap> roundsSnapshot;
-
-            lock (_lock)
+            foreach (var key  in _options.Tables)
             {
-                roundsSnapshot = _rounds.Values.ToList();
-            }
+                var table = key.Value;
 
-            foreach (var round in roundsSnapshot)
-            {
+                var round = table.CurrentRound;
+                if(round is null) continue;
+                
                 if (round.StartsAt > DateTimeOffset.UtcNow)
                     continue;
 
-                if (round.CurrentTick >= round.MaxTick)
+                if (round.IsCrashed)
                 {
-                    await SendCrashEvent(round);
-
-                    lock (_lock)
-                    {
-                        _rounds.Remove(round.RoundId);
-                    }
-
                     _logger.LogInformation(
-                        $"Round {round.RoundId} crashed at {round.CurrentTick}",
+                        $"Round {round.RoundId} is crashed at {round.CurrentMultiplier}",
                         round.RoundId,
-                        round.CurrentTick,round);
+                        round);
+                    continue;
+                }
+                  
+                if (round.CurrentMultiplier >= round.CrashPoint)
+                {
+                    await SendCrashEvent(round,table.TableId);
+                    
+                    _logger.LogInformation(
+                        $"Round {round.RoundId} crashed at {round.CurrentMultiplier}",
+                        round.RoundId,
+                        round);
+                    round.IsCrashed = true;
 
                     continue;
                 }
-
+                
                 // INFO[Mahmoud] Bad Design 
                 // if a tick is delayed, there will be lags the next tick sends the correct current multiplier, not just +0.1
                 // PlayerMessageConsumer
@@ -124,17 +111,19 @@ public sealed class RoundsTicker:BackgroundService
                 //     -> sends crash command when crash point reached
                 //  OR 
                 // Think later on a better design for round Memory shared state 
-                round.CurrentTick += 0.1m;
+                round.CurrentMultiplier += 0.1m;
 
-                await SendTickEvent(round);
+                await SendTickEvent(round,table.TableId);
 
                 _logger.LogInformation(
-                    $"Round {round.RoundId} tick {round.CurrentTick}",
+                    $"Round {round.RoundId} tick {round.CurrentMultiplier}",
                     round.RoundId,
-                    round.CurrentTick,round);
-            }
+                    round.CurrentMultiplier,round);
 
+            }
             await Task.Delay(TickInterval, stoppingToken);
+
+
         }
     }
 }

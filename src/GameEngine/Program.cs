@@ -2,6 +2,7 @@ using Crash.Domain.Options;
 using Crash.Rng;
 using Crash.Persistence;
 using Crash.Persistence.Logger;
+using Crash.Persistence.Repositories;
 using GameEngine.Messaging;
 using GameEngine.Repository;
 using GameEngine.Seeders;
@@ -22,6 +23,13 @@ var gameEngineOptions = builder.Configuration
 var dbWorkerBrokerOptions = builder.Configuration
     .GetSection(DbBrokerOptions.SectionName)
     .Get<DbBrokerOptions>() ?? new DbBrokerOptions();
+
+var fanoutOptions = builder.Configuration
+    .GetSection(FanoutOptions.SectionName)
+    .Get<FanoutOptions>() ?? new FanoutOptions();
+
+builder.Services.AddSingleton(fanoutOptions);
+
 builder.Services.AddGrpcClient<Rng.RngClient>(options =>
 {
     options.Address = new Uri(rngAddress);
@@ -30,14 +38,15 @@ builder.Services.AddSingleton(dbWorkerBrokerOptions);
 
 builder.Services.AddSingleton(playerBrokerOptions);
 builder.Services.AddSingleton(gameEngineOptions);
-builder.Services.AddSingleton<RoundsService>();
+ builder.Services.AddSingleton<RoundsService>();
 builder.Services.AddSingleton<IDbWorkerMessagePublisher, DbWorkerMessagePublisher>();
+builder.Services.AddSingleton<IClientMessagePublisher,ClientMessagePublisher>();
 builder.Services.AddSingleton<RoundEngine>();
 builder.Services.AddHostedService<PlayerMessageConsumer>();
 builder.Services.AddHostedService<Core>();
 builder.Services.AddSingleton<RoundsTicker>();
-builder.Services.AddHostedService<RoundsTicker>();
-builder.Services.AddHostedService<RoundsService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<RoundsTicker>());
+builder.Services.AddHostedService(sp => sp.GetRequiredService<RoundsService>());
 
 
 // Seeders 
@@ -47,6 +56,8 @@ builder.Services.AddScoped<IDatabaseSeeder, TablesSeeder>();
 builder.Services.AddScoped<ITableRepository, TableRepository>();
 builder.Services.AddScoped<IRoundRepository, RoundRepository>(); 
 builder.Services.AddScoped<IOwnerRepository, OwnerRepository>();
+builder.Services.AddScoped<IPlayerRepository, PlayerRepository>();
+
 builder.Services.AddDbContext<DataContext>(options =>
 {
     var connectionString = builder.Configuration.GetConnectionString("MySql")

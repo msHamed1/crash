@@ -18,7 +18,11 @@ var brokerOptions = builder.Configuration
 var jwtOptions = builder.Configuration
     .GetSection(JwtOptions.SectionName)
     .Get<JwtOptions>() ?? new JwtOptions();
+var fanoutOptions = builder.Configuration
+    .GetSection(FanoutOptions.SectionName)
+    .Get<FanoutOptions>() ?? new FanoutOptions();
 
+builder.Services.AddSingleton(fanoutOptions);
 if (string.IsNullOrWhiteSpace(jwtOptions.SigningKey))
 {
     throw new InvalidOperationException("Jwt:SigningKey is required.");
@@ -49,6 +53,9 @@ builder.Services.AddSingleton<IJwtConnectionValidator, JwtConnectionValidator>()
 builder.Services.AddSingleton<IPlayerMessagePublisher, PlayerMessagePublisher>();
 builder.Services.AddScoped<IPlayerRepository, PlayerRepository>();
 builder.Services.AddScoped<ITableRepository, TableRepository>();
+
+// Hosted service ;
+builder.Services.AddHostedService<ClientMessagesConsumer>();
 builder.Services.AddDbContext<DataContext>(options =>
 {
     var connectionString = builder.Configuration.GetConnectionString("MySql")

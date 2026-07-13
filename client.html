@@ -81,6 +81,42 @@
       font-weight: 700;
     }
 
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .metric {
+      border: 1px solid #d9e0e8;
+      border-radius: 6px;
+      padding: 12px;
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .metric span:first-child {
+      color: #637083;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .metric span:last-child {
+      font-size: 20px;
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
+
+    .round-state {
+      border-left: 4px solid #1769aa;
+    }
+
+    .round-state.crashed {
+      border-left-color: #c62828;
+    }
+
     pre {
       min-height: 180px;
       margin: 0;
@@ -99,6 +135,10 @@
 
       .grid {
         grid-template-columns: 1fr;
+      }
+
+      .metric-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
       }
     }
   </style>
@@ -120,7 +160,7 @@
         </label>
         <label>
           Table ID
-          <input id="tableId" value="table-1">
+          <input id="tableId" value="" readonly>
         </label>
         <label>
           Gateway API
@@ -129,6 +169,28 @@
       </div>
       <button id="connectButton">Connect</button>
       <div>Status: <span id="status">disconnected</span></div>
+    </section>
+
+    <section id="roundState" class="round-state">
+      <h2>Live Round</h2>
+      <div class="metric-grid">
+        <div class="metric">
+          <span>Round</span>
+          <span id="roundId">-</span>
+        </div>
+        <div class="metric">
+          <span>Multiplier</span>
+          <span id="currentMultiplier">1.00x</span>
+        </div>
+        <div class="metric">
+          <span>Table</span>
+          <span id="liveTableId">-</span>
+        </div>
+        <div class="metric">
+          <span>Phase</span>
+          <span id="roundPhase">Waiting</span>
+        </div>
+      </div>
     </section>
 
     <section>
@@ -158,11 +220,17 @@
 
   <script>
     let connection = null;
+    let loginSession = null;
 
     const connectButton = document.getElementById("connectButton");
     const sendBetButton = document.getElementById("sendBetButton");
     const statusElement = document.getElementById("status");
     const logElement = document.getElementById("log");
+    const roundStateElement = document.getElementById("roundState");
+    const roundIdElement = document.getElementById("roundId");
+    const currentMultiplierElement = document.getElementById("currentMultiplier");
+    const liveTableIdElement = document.getElementById("liveTableId");
+    const roundPhaseElement = document.getElementById("roundPhase");
 
     connectButton.addEventListener("click", connect);
     sendBetButton.addEventListener("click", sendBet);
@@ -170,39 +238,60 @@
     async function connect() {
       const gatewayApi = getValue("gatewayApi").replace(/\/$/, "");
       setStatus("requesting connection");
+      connectButton.disabled = true;
+      sendBetButton.disabled = true;
 
-      const response = await fetch(`${gatewayApi}/api/players/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-           username: getValue("username"),
-         })
-      });
+      try {
+        if (connection) {
+          await connection.stop();
+          connection = null;
+        }
 
-      if (!response.ok) {
-        throw new Error(`Connection API failed with ${response.status}`);
+        const response = await fetch(`${gatewayApi}/api/players/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+             username: getValue("username"),
+           })
+        });
+
+        if (!response.ok) {
+          const errorBody = await response.text();
+          throw new Error(`Login API failed with ${response.status}: ${errorBody || response.statusText}`);
+        }
+
+        loginSession = normalizeLoginResponse(await response.json());
+        document.getElementById("tableId").value = loginSession.player.tableId ?? "";
+        appendLog("login session", loginSession);
+
+        connection = new signalR.HubConnectionBuilder()
+          .withUrl(loginSession.hubUrl, {
+            accessTokenFactory: () => loginSession.token
+          })
+          .withAutomaticReconnect()
+          .build();
+
+        registerServerMessageHandlers(connection);
+
+        connection.onreconnecting(() => {
+          setStatus("reconnecting");
+          sendBetButton.disabled = true;
+        });
+        connection.onreconnected(() => {
+          setStatus("connected");
+          sendBetButton.disabled = false;
+        });
+        connection.onclose(() => {
+          setStatus("disconnected");
+          sendBetButton.disabled = true;
+        });
+
+        await connection.start();
+        setStatus(`connected as ${loginSession.player.externalId} on table ${loginSession.player.tableId}`);
+        sendBetButton.disabled = false;
+      } finally {
+        connectButton.disabled = false;
       }
-
-      const connectionInfo = await response.json();
-      appendLog("connection info", connectionInfo);
-
-      connection = new signalR.HubConnectionBuilder()
-        .withUrl(connectionInfo.HubUrl, {
-          accessTokenFactory: () => connectionInfo.Token
-        })
-        .withAutomaticReconnect()
-        .build();
-
-      connection.onreconnecting(() => setStatus("reconnecting"));
-      connection.onreconnected(() => setStatus("connected"));
-      connection.onclose(() => {
-        setStatus("disconnected");
-        sendBetButton.disabled = true;
-      });
-
-      await connection.start();
-      setStatus("connected");
-      sendBetButton.disabled = false;
     }
 
     async function sendBet() {
@@ -223,6 +312,70 @@
 
       await connection.invoke("Bet", message);
       appendLog("sent bet", message);
+    }
+
+    function registerServerMessageHandlers(hubConnection) {
+      hubConnection.on("NewRoundInfo", message => {
+        updateRoundState(message, "Running");
+        appendLog("received NewRoundInfo", message);
+      });
+
+      hubConnection.on("RoundTick", message => {
+        updateRoundState(message, "Running");
+        appendLog("received RoundTick", message);
+      });
+
+      hubConnection.on("RoundCrashed", message => {
+        updateRoundState(message, "Crashed");
+        appendLog("received RoundCrashed", message);
+      });
+
+      hubConnection.on("CurrentState", message => {
+        updateRoundState(message, isCrashed(message) ? "Crashed" : "Running");
+        appendLog("received CurrentState", message);
+      });
+    }
+
+    function updateRoundState(message, phase) {
+      const roundId = readField(message, "roundId", "RoundId");
+      const tableId = readField(message, "tableId", "TableId");
+      const multiplier = readField(message, "currentMultiplier", "CurrentMultiplier");
+      const crashed = isCrashed(message) || phase === "Crashed";
+
+      if (roundId !== undefined && roundId !== null) {
+        roundIdElement.textContent = String(roundId);
+      }
+
+      if (tableId !== undefined && tableId !== null) {
+        liveTableIdElement.textContent = String(tableId);
+      }
+
+      if (multiplier !== undefined && multiplier !== null) {
+        currentMultiplierElement.textContent = `${Number(multiplier).toFixed(2)}x`;
+      }
+
+      roundPhaseElement.textContent = crashed ? "Crashed" : phase;
+      roundStateElement.classList.toggle("crashed", crashed);
+    }
+
+    function isCrashed(message) {
+      return Boolean(readField(message, "isCrashed", "IsCrashed"));
+    }
+
+    function readField(obj, camelKey, pascalKey) {
+      return obj?.[camelKey] ?? obj?.[pascalKey];
+    }
+
+    function normalizeLoginResponse(response) {
+      const token = response.token ?? response.Token;
+      const hubUrl = response.hubUrl ?? response.HubUrl;
+      const player = response.player ?? response.Player;
+
+      if (!token || !hubUrl || !player) {
+        throw new Error("Login response must include token, hubUrl, and player.");
+      }
+
+      return { token, hubUrl, player };
     }
 
     function getValue(id) {

@@ -77,6 +77,13 @@ services:
       Broker__ExchangeName: crash.player-messages
       MySql__ConnectionString: Server=mysql;Port=3306;Database=crash_game;User=crash;Password=crash_password;
       Jwt__SigningKey: local-dev-signalr-jwt-signing-key-change-me
+      Fanout__HostName: rabbitmq
+      Fanout__Port: 5672
+      Fanout__UserName: crash
+      Fanout__Password: crash_password
+      Fanout__ExchangeName: crash.fanout-messages
+      Fanout__QueueName: crash.fanout
+      Fanout__RoutingKey: ClientMessages
     ports:
       - "5003:8080"
     depends_on:
@@ -110,6 +117,13 @@ services:
       Broker__Password: crash_password
       Broker__ExchangeName: crash.player-messages
       GameEngine__EngineId: engine-1
+      Fanout__HostName: rabbitmq
+      Fanout__Port: 5672
+      Fanout__UserName: crash
+      Fanout__Password: crash_password
+      Fanout__ExchangeName: crash.fanout-messages
+      Fanout__QueueName: crash.fanout
+      Fanout__RoutingKey: ClientMessages
    
     ports:
       - "5002:8080"
@@ -134,6 +148,13 @@ services:
       Broker__Password: crash_password
       Broker__ExchangeName: crash.player-messages
       GameEngine__EngineId: engine-2
+      Fanout__HostName: rabbitmq
+      Fanout__Port: 5672
+      Fanout__UserName: crash
+      Fanout__Password: crash_password
+      Fanout__ExchangeName: crash.fanout-messages
+      Fanout__QueueName: crash.fanout
+      Fanout__RoutingKey: ClientMessages
     ports:
       - "5004:8080"
     depends_on:

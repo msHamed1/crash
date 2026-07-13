@@ -299,7 +299,7 @@ public sealed class PlayerMessageConsumer   : BackgroundService
 
              //   await _gameEngine.PlayerJoinedAsync(message, ct);
              _logger.LogInformation("Player {PlayerId} Joined the table {TableId}",message.Data.PlayerId,message.TableId);
-
+             Console.WriteLine("Player {0} Joined the table {1}",message.Data.PlayerId,message.TableId);
              var envelop = new PlayerJoinedCommand 
              {
                  TableId = message.TableId.ToString(),

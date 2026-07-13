@@ -23,13 +23,15 @@ public sealed class PlayerBrokerOptions
 }
 
 
-public sealed class RgsBrokerOptions
+public sealed class FanoutOptions
 {
-    public const string SectionName = "Broker";
+    public const string SectionName = "Fanout";
 
     public string HostName { get; init; } = "localhost";
     public int Port { get; init; } = 5672;
     public string UserName { get; init; } = "guest";
     public string Password { get; init; } = "guest";
-    public string ExchangeName { get; init; } = "crash.rgs-messages";
+    public string ExchangeName { get; init; } = "crash.fanout-messages";
+    public string QueueName { get; init; } = "crash.fanout";
+    public string RoutingKey { get; init; } = "ClientMessages";
 }

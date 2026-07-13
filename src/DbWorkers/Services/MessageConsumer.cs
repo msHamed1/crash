@@ -17,6 +17,8 @@ public sealed class DbMessageConsumer (
     {
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
+    
+    private readonly object _channelLock = new();
      protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
@@ -75,15 +77,13 @@ public sealed class DbMessageConsumer (
                     message.Payload.TableId,
                     message.MessageId);
                 
-                channel.BasicAck(args.DeliveryTag, multiple: false);
-
+                SafeAck(channel, args.DeliveryTag);
 
             }
             catch (Exception e)
             {
                 logger.LogError(e, "Failed to process player message.");
-                channel.BasicNack(args.DeliveryTag, multiple: false, requeue: true);
-            }
+                SafeNack(channel, args.DeliveryTag, requeue: true);            }
             await Task.CompletedTask;
 
         };
@@ -113,6 +113,22 @@ public sealed class DbMessageConsumer (
         WaitHandle.WaitAny([ct.WaitHandle]);
 
 
+    }
+    
+    private void SafeAck(IModel channel, ulong deliveryTag)
+    {
+        lock (_channelLock)
+        {
+            channel.BasicAck(deliveryTag, multiple: false);
+        }
+    }
+
+    private void SafeNack(IModel channel, ulong deliveryTag, bool requeue)
+    {
+        lock (_channelLock)
+        {
+            channel.BasicNack(deliveryTag, multiple: false, requeue: requeue);
+        }
     }
     
     private static string GetTableQueueName()

@@ -10,6 +10,5 @@ namespace Crash.Domain.State;
 public sealed class PlayerRuntimeState
 {
     public required long PlayerId { get; init; }
-    public required string Username { get; init; }
-    public decimal Balance { get; set; }
+     public decimal Balance { get; set; }
 }
