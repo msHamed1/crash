@@ -20,6 +20,22 @@ public record NewRoundInfo : ToClient
     public bool IsCrashed { get; set; }
 }
 
+public record PlayerBetAccepted : ToClient
+{
+    public override string MessageType => "PlayerBetAccepted";
+    private long PlayerId { get; init; }
+    public decimal UpdatedBalance { get; init; }
+    public Bet Bet { get; init; }
+}
+
+public record PlayerBetRejected : ToClient
+{
+    public override string MessageType => "PlayerBetAccepted";
+    private long PlayerId { get; init; }
+    public decimal UpdatedBalance { get; init; }
+    public Bet Bet { get; init; }
+}
+
 public record CurrentState: ToClient
 {
     public override string MessageType => "CurrentState";

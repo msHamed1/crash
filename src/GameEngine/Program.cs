@@ -62,6 +62,7 @@ builder.Services.AddScoped<ITableRepository, TableRepository>();
 builder.Services.AddScoped<IRoundRepository, RoundRepository>(); 
 builder.Services.AddScoped<IOwnerRepository, OwnerRepository>();
 builder.Services.AddScoped<IPlayerRepository, PlayerRepository>();
+builder.Services.AddScoped<IBetRepository, BetRepository>();
 
 builder.Services.AddDbContext<DataContext>(options =>
 {

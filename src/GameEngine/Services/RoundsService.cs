@@ -93,36 +93,38 @@ public sealed class RoundsService : BackgroundService
                 _logger.LogWarning("Ignoring command {MessageType} for unowned table {TableId}", command.MessageType, command.TableId);
                 return;
             }
-            if (command is PlayerJoinedCommand playerJoinedCommand)
+            switch (command)
             {
-                await ProcessPlayerJoinedCommand(
-                    playerJoinedCommand,
-                    table,
-                    ct);
-            }
-            
-            
-            if (command is RoundTickCommand roundTickCommand)
-            {
-                await ProcessRoundTickCommand(
-                    roundTickCommand,
-                    table,
-                    ct);
-            }
-            
-             if (command is RoundCrashCommand roundCrashCommand)
-            {
-                await ProcessRoundCrashedCommand(
-                    roundCrashCommand,
-                    table,
-                    ct);
-            }
-            if (command is NewRoundCommand newRoundCommand)
-            {
-                await ProcessNewRoundCommand(
-                    newRoundCommand,
-                    table,
-                    ct);
+                case PlayerJoinedCommand playerJoinedCommand:
+                    await ProcessPlayerJoinedCommand(
+                        playerJoinedCommand,
+                        table,
+                        ct);
+                    break;
+                case RoundTickCommand roundTickCommand:
+                    await ProcessRoundTickCommand(
+                        roundTickCommand,
+                        table,
+                        ct);
+                    break;
+                case  PlayerBetCommand playerBetCommand :
+                    await ProcessPlayerBetCommand(
+                        playerBetCommand,
+                        table,
+                        ct);
+                    break;
+                case RoundCrashCommand roundCrashCommand:
+                    await ProcessRoundCrashedCommand(
+                        roundCrashCommand,
+                        table,
+                        ct);
+                    break;
+                case NewRoundCommand newRoundCommand:
+                    await ProcessNewRoundCommand(
+                        newRoundCommand,
+                        table,
+                        ct);
+                    break;
             }
         }
         catch (Exception e)
@@ -227,6 +229,65 @@ public sealed class RoundsService : BackgroundService
         await SendRoundTickCommand(command, long.Parse(command.TableId), ct);
     }
 
+    private async Task ProcessPlayerBetCommand(PlayerBetCommand command, TableRuntimeState table, CancellationToken ct)
+    {
+        if (!IsCurrentRound(table, command.RoundId))
+        {
+            // Send Error or ignore it silently with log 
+            return;
+        }
+
+        if (!table.GetPlayer(long.Parse(command.PlayerId), out var player))
+        {
+            return;
+        }
+
+        if (player is null)
+        {
+            return;
+        }
+
+       var bet=  table.AddNewBet(player, command.Amount, long.Parse(command.RoundId));
+       if (bet is null)
+       {
+           return;
+       }
+       using var scope = _scopeFactory.CreateScope();
+       var betsRepo = scope.ServiceProvider.GetRequiredService<IBetRepository>();
+       
+       await betsRepo.CreateBet(bet, ct);
+
+       return  ;
+
+
+    }
+    
+    
+    private async Task  SendPlayerBetUpdated(TableRuntimeState table,Bet bet, CancellationToken ct)
+    {
+       
+        var round = table.GetCurrentRoundSnapshot();
+        if (round is null)
+            return;
+
+        _logger.LogInformation("Sending Round {RoundId} for Table {TableId}", round.RoundId, table.TableId);
+
+        var message = new PlayerBetAccepted
+        {
+
+            TableId = table.TableId,
+            MessageId = Guid.NewGuid().ToString(),
+            UpdatedBalance = 0,
+            Bet = bet,
+
+        };
+
+        await _publisher.PublishAsync(message,ct);
+
+
+
+    }
+
     private async Task  SendNewRoundCreated(TableRuntimeState table, CancellationToken ct)
     {
        
@@ -272,6 +333,9 @@ public sealed class RoundsService : BackgroundService
 
 
     }
+    
+    
+   
    
 
     private async Task<Round?> CreateAndPublishRound(long tableId,CancellationToken ct)

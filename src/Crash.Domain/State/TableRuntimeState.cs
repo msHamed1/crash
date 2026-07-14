@@ -1,3 +1,6 @@
+using System.Collections.Concurrent;
+using Crash.Domain.Entities;
+
 namespace Crash.Domain.State;
 
 
@@ -18,7 +21,7 @@ namespace Crash.Domain.State;
 public sealed class TableRuntimeState
 {
     private readonly object _lock = new();
-
+ 
     public long TableId { get; }
 
     public long FencingToken { get; private set; }
@@ -26,12 +29,75 @@ public sealed class TableRuntimeState
     private RoundRuntimeState? _currentRound;
 
     private readonly List<PlayerRuntimeState> _players = new();
+    
+    
 
     public TableRuntimeState(long tableId)
     {
         TableId = tableId;
     }
 
+    public Bet? AddNewBet(
+        PlayerRuntimeState player,
+        decimal amount,
+        long roundId)
+    {
+        const decimal minimumBet = 0.10m;
+
+        // Validate values that do not depend on mutable round state
+        // before acquiring the table lock.
+        if (amount < minimumBet)
+        {
+            return null;
+        }
+
+        lock (_lock)
+        {
+            var round = _currentRound;
+
+            if (round is null || round.IsCrashed)
+            {
+                return null;
+            }
+
+            // A client may submit a delayed command from a previous round.
+            // Always compare it with the table's authoritative current round.
+            if (round.RoundId != roundId)
+            {
+                return null;
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            var bettingClosesAt = round.StartsAt.AddSeconds(-1);
+
+            // This rejects bets during the final second before launch
+            // and all bets arriving after the round has started.
+            if (now >= bettingClosesAt)
+            {
+                return null;
+            }
+
+            var bet = new Bet
+            {
+                PlayerId = player.PlayerId,
+                RoundId = round.RoundId,
+                Amount = amount,
+                BetId = Guid.NewGuid().ToString(),
+                Currency = "USD",
+                Status = BetStatus.Placed,
+                CreatedAt = now
+            };
+
+            // TryAdd is the authoritative duplicate-bet check.
+            // It remains safe even if the preliminary ContainsKey check is removed.
+            if (round.TryAddBet(bet))
+            {
+                return bet;
+            }
+            return null ;
+        }
+    }
+ 
     public IReadOnlyList<PlayerRuntimeState> Players
     {
         get
@@ -154,6 +220,16 @@ public sealed class TableRuntimeState
 
             _players.Add(player);
             return true;
+        }
+    }
+    
+    public bool GetPlayer(long  playerId, out PlayerRuntimeState? player)
+    {
+        lock (_lock)
+        {
+
+            player= _players.FirstOrDefault(p => p.PlayerId == playerId);
+            return player is not null;
         }
     }
 

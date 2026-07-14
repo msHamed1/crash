@@ -21,9 +21,28 @@ public class DataContext: DbContext
     
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        modelBuilder.Entity<Bet>();
+        modelBuilder.Entity<Bet>()
+            .HasOne(b => b.Round)
+            .WithMany(r => r.Bets)
+            .HasForeignKey(b => b.RoundId);
+
+        modelBuilder.Entity<Bet>()
+            .Property(b => b.Status)
+            .HasConversion<string>();
+        
+        modelBuilder.Entity<Bet>()
+            .Property(b => b.BetId)
+            .IsRequired();
+
+        modelBuilder.Entity<Bet>()
+            .HasIndex(b => b.BetId)
+            .IsUnique();
+        
+        
         modelBuilder.Entity<Player>();
         modelBuilder.Entity<Round>().HasOne(r=>r.Table).WithMany(t=>t.Rounds).HasForeignKey(r=>r.TableId);
+        modelBuilder.Entity<Round>().HasMany(r=>r.Bets).WithOne(b=>b.Round).HasForeignKey(b=>b.RoundId);
+
         modelBuilder.Entity<Table>();   
         modelBuilder.Entity<Owner>();
 

@@ -18,3 +18,5 @@ public sealed record PlaceBetReqData
     public decimal? AutoCashoutAt { get; init; }
     public bool? AutoCashoutEnabled { get; init; }
 }
+
+
