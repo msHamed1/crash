@@ -9,12 +9,14 @@ public sealed class DatebaseLogger :ILogger
 {
     private readonly string _category;
 
-    private readonly IServiceScopeFactory _scopeFactory;
+    
+    private readonly DatabaseLogQueue _queue;
 
-    public DatebaseLogger(string category, IServiceScopeFactory scopeFactory)
+
+    public DatebaseLogger(string category, DatabaseLogQueue queue)
     {
         _category = category;
-        _scopeFactory = scopeFactory;
+        _queue = queue;
     }
     
     public void  Log<TState>(
@@ -43,10 +45,8 @@ public sealed class DatebaseLogger :ILogger
                     data = JsonSerializer.Serialize(obj);
                 }
             }
-            using var scope = _scopeFactory.CreateScope();
 
-            var db = scope.ServiceProvider.GetRequiredService<DataContext>();
-            db.AppLogs.Add(new AppLog
+            var log = new AppLog
             {
                 Category = _category,
                 CreatedAt = DateTime.UtcNow,
@@ -54,8 +54,22 @@ public sealed class DatebaseLogger :ILogger
                 Exception = exception?.ToString(),
                 Level = logLevel.ToString(),
                 Data = data,
-            });
-            db.SaveChanges();
+            };
+            // Immediate non-blocking operation.
+            _queue.TryEnqueue(log);
+            // using var scope = _scopeFactory.CreateScope();
+            //
+            // var db = scope.ServiceProvider.GetRequiredService<DataContext>();
+            // db.AppLogs.Add(new AppLog
+            // {
+            //     Category = _category,
+            //     CreatedAt = DateTime.UtcNow,
+            //     Message = message,
+            //     Exception = exception?.ToString(),
+            //     Level = logLevel.ToString(),
+            //     Data = data,
+            // });
+            // db.SaveChanges();
         }
         catch
         {
@@ -67,7 +81,9 @@ public sealed class DatebaseLogger :ILogger
     {
         // Database writes are synchronous in this provider. Persisting Information/Debug logs
         // from the 50 ms round loop can block the game engine and must never be on the hot path.
-        return logLevel >= LogLevel.Warning && logLevel != LogLevel.None;
+        
+        // we will create a background service for it 
+        return true; // logLevel >= LogLevel.Warning && logLevel != LogLevel.None;
     }
 
     public IDisposable? BeginScope<TState>(TState state) where TState : notnull

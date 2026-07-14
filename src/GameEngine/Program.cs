@@ -38,16 +38,21 @@ builder.Services.AddSingleton(dbWorkerBrokerOptions);
 
 builder.Services.AddSingleton(playerBrokerOptions);
 builder.Services.AddSingleton(gameEngineOptions);
- builder.Services.AddSingleton<RoundsService>();
+builder.Services.AddSingleton<RoundsService>();
 builder.Services.AddSingleton<IDbWorkerMessagePublisher, DbWorkerMessagePublisher>();
 builder.Services.AddSingleton<IClientMessagePublisher,ClientMessagePublisher>();
-builder.Services.AddSingleton<RoundEngine>();
 builder.Services.AddHostedService<PlayerMessageConsumer>();
 builder.Services.AddHostedService<Core>();
 builder.Services.AddSingleton<RoundsTicker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<RoundsTicker>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<RoundsService>());
 
+// Logs 
+builder.Services.AddSingleton<DatabaseLogQueue>();
+builder.Services.AddHostedService<DataBaseLogWriter>();
+builder.Services.AddHostedService<DataBaseLogWriter>();
+
+builder.Services.AddSingleton<ILoggerProvider, DatabaseLoggerProvider>();
 
 // Seeders 
 builder.Services.AddScoped<IDatabaseSeeder, TablesSeeder>();
@@ -77,12 +82,12 @@ builder.Services.AddDbContext<DataContext>(options =>
 //         )
 //     );
 
-builder.Logging.AddProvider(
-    new DatabaseLoggerProvider(
-        builder.Services.BuildServiceProvider()
-            .GetRequiredService<IServiceScopeFactory>()
-    )
-);
+// builder.Logging.AddProvider(
+//     new DatabaseLoggerProvider(
+//         builder.Services.BuildServiceProvider()
+//             .GetRequiredService<IServiceScopeFactory>()
+//     )
+// );
 
 var app = builder.Build();
 
@@ -94,17 +99,6 @@ using (var scope = app.Services.CreateScope())
     var seeder = scope.ServiceProvider.GetRequiredService<IDatabaseSeeder>();
     await seeder.SeedAsync(CancellationToken.None);
 }
-
-app.MapGet("/", () => "GameEngine is running. POST /rounds/start to generate crash round entropy.");
-
-app.MapPost("/rounds/start", async (
-    StartRoundRequest? request,
-    RoundEngine roundEngine,
-    CancellationToken cancellationToken) =>
-{
-    var round = await roundEngine.StartRoundAsync(request ?? new StartRoundRequest(null, null, null, null), cancellationToken);
-    return Results.Created($"/rounds/{round.RoundId}", round);
-});
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 

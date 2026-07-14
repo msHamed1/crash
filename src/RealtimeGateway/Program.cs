@@ -9,7 +9,8 @@ using Microsoft.EntityFrameworkCore;
 using RealtimeGateway.Hubs;
 using RealtimeGateway.Jwt;
 using RealtimeGateway.Messaging;
- 
+using RealtimeGateway.Services;
+
 var builder = WebApplication.CreateBuilder(args);
 
 var brokerOptions = builder.Configuration
@@ -54,6 +55,13 @@ builder.Services.AddSingleton<IPlayerMessagePublisher, PlayerMessagePublisher>()
 builder.Services.AddScoped<IPlayerRepository, PlayerRepository>();
 builder.Services.AddScoped<ITableRepository, TableRepository>();
 
+// Logs 
+builder.Services.AddSingleton<DatabaseLogQueue>();
+builder.Services.AddHostedService<DataBaseLogWriter>();
+builder.Services.AddHostedService<DataBaseLogWriter>();
+builder.Services.AddSingleton<ILoggerProvider, DatabaseLoggerProvider>();
+
+
 // Hosted service ;
 builder.Services.AddHostedService<ClientMessagesConsumer>();
 builder.Services.AddDbContext<DataContext>(options =>
@@ -68,12 +76,12 @@ builder.Services.AddDbContext<DataContext>(options =>
     );
 });
 
-builder.Logging.AddProvider(
-    new DatabaseLoggerProvider(
-        builder.Services.BuildServiceProvider()
-            .GetRequiredService<IServiceScopeFactory>()
-    )
-);
+// builder.Logging.AddProvider(
+//     new DatabaseLoggerProvider(
+//         builder.Services.BuildServiceProvider()
+//             .GetRequiredService<IServiceScopeFactory>()
+//     )
+// );
  var app = builder.Build();
  
 app.UseCors();

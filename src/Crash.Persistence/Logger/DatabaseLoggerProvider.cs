@@ -5,18 +5,17 @@ namespace Crash.Persistence.Logger;
 
 public class DatabaseLoggerProvider:ILoggerProvider
 {
-    private readonly IServiceScopeFactory scopeFactory;
+    private readonly DatabaseLogQueue _queue;
 
-    public DatabaseLoggerProvider(IServiceScopeFactory scopeFactory)
+    public DatabaseLoggerProvider(DatabaseLogQueue queue)
     {
-        this.scopeFactory = scopeFactory;
+      _queue = queue;
     }
 
     public ILogger CreateLogger(string categoryName)
     {
-        return new DatebaseLogger(categoryName, scopeFactory);
+        return new DatebaseLogger(categoryName, _queue);
     }
-
     public void Dispose()
     {
     }
