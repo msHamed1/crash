@@ -133,35 +133,35 @@ services:
       rabbitmq:
         condition: service_healthy
 
-  game-engine-2:
-    build:
-      context: .
-      dockerfile: src/GameEngine/Dockerfile
-    container_name: crash-game-engine-2
-    environment:
-      ASPNETCORE_URLS: http://+:8080
-      MySql__ConnectionString: Server=mysql;Port=3306;Database=crash_game;User=crash;Password=crash_password;
-      Services__Rng__Address: http://rng-service:8080
-      Broker__HostName: rabbitmq
-      Broker__Port: 5672
-      Broker__UserName: crash
-      Broker__Password: crash_password
-      Broker__ExchangeName: crash.player-messages
-      GameEngine__EngineId: engine-2
-      Fanout__HostName: rabbitmq
-      Fanout__Port: 5672
-      Fanout__UserName: crash
-      Fanout__Password: crash_password
-      Fanout__ExchangeName: crash.fanout-messages
-      Fanout__QueueName: crash.fanout
-      Fanout__RoutingKey: ClientMessages
-    ports:
-      - "5004:8080"
-    depends_on:
-      rng-service:
-        condition: service_started
-      rabbitmq:
-        condition: service_healthy
+#  game-engine-2:
+#    build:
+#      context: .
+#      dockerfile: src/GameEngine/Dockerfile
+#    container_name: crash-game-engine-2
+#    environment:
+#      ASPNETCORE_URLS: http://+:8080
+#      MySql__ConnectionString: Server=mysql;Port=3306;Database=crash_game;User=crash;Password=crash_password;
+#      Services__Rng__Address: http://rng-service:8080
+#      Broker__HostName: rabbitmq
+#      Broker__Port: 5672
+#      Broker__UserName: crash
+#      Broker__Password: crash_password
+#      Broker__ExchangeName: crash.player-messages
+#      GameEngine__EngineId: engine-2
+#      Fanout__HostName: rabbitmq
+#      Fanout__Port: 5672
+#      Fanout__UserName: crash
+#      Fanout__Password: crash_password
+#      Fanout__ExchangeName: crash.fanout-messages
+#      Fanout__QueueName: crash.fanout
+#      Fanout__RoutingKey: ClientMessages
+#    ports:
+#      - "5004:8080"
+#    depends_on:
+#      rng-service:
+#        condition: service_started
+#      rabbitmq:
+#        condition: service_healthy
 
   db-workers:
     build:
