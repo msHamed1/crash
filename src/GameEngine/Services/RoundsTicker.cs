@@ -10,6 +10,8 @@ public sealed class RoundsTicker:BackgroundService
     
     private readonly ILogger<RoundsTicker> _logger;
     private static readonly TimeSpan TickInterval = TimeSpan.FromMilliseconds(50);
+    // The authoritative multiplier is e^(rate * elapsedSeconds), not the number of ticker iterations.
+    private const double GrowthRatePerSecond = 0.12d;
 
     private readonly GameEngineOptions _options;
     private readonly RoundsService  _roundsService;
@@ -25,37 +27,39 @@ public sealed class RoundsTicker:BackgroundService
 
     }
 
-    private async Task SendCrashEvent(RoundRuntimeState roundTickMap,long TableId)
+    private async Task SendCrashEvent(RoundRuntimeSnapshot round, long tableId, CancellationToken ct)
     {
         var envelop = new RoundCrashCommand
         {
-            CurrentMultiplier = roundTickMap.CurrentMultiplier,
-            RoundId = roundTickMap.RoundId.ToString(),
-            TableId = TableId.ToString(),
+            CurrentMultiplier = round.CurrentMultiplier,
+            RoundId = round.RoundId.ToString(),
+            TableId = tableId.ToString(),
+            TickSequence = round.TickSequence
 
         };
-       await _roundsService.EnqueueAsync(envelop);
+       await _roundsService.EnqueueAsync(envelop, ct);
 
        var newRoundCommand = new NewRoundCommand()
        {
-           TableId =TableId.ToString(),
+           TableId = tableId.ToString(),
        };
-       await _roundsService.EnqueueAsync(newRoundCommand);
+       await _roundsService.EnqueueAsync(newRoundCommand, ct);
        
         
     }
     
     
-    private async Task SendTickEvent(RoundRuntimeState roundTickMap,long TableId)
+    private async Task SendTickEvent(RoundRuntimeSnapshot round, long tableId, CancellationToken ct)
     {
         var envelop = new RoundTickCommand 
         {
-            CurrentMultiplier = roundTickMap.CurrentMultiplier,
-            RoundId = roundTickMap.RoundId.ToString(),
-            TableId =TableId.ToString() ,
+            CurrentMultiplier = round.CurrentMultiplier,
+            RoundId = round.RoundId.ToString(),
+            TableId = tableId.ToString(),
+            TickSequence = round.TickSequence
 
         };
-        await _roundsService.EnqueueAsync(envelop);
+        await _roundsService.EnqueueAsync(envelop, ct);
        
         
     }
@@ -66,59 +70,29 @@ public sealed class RoundsTicker:BackgroundService
     {
         while (!stoppingToken.IsCancellationRequested)
         {
-            foreach (var key  in _options.Tables)
+            var now = DateTimeOffset.UtcNow;
+            foreach (var key in _options.Tables)
             {
                 var table = key.Value;
-
-                var round = table.CurrentRound;
-                if(round is null) continue;
-                
-                if (round.StartsAt > DateTimeOffset.UtcNow)
+                if (!table.TryAdvanceRound(now, GrowthRatePerSecond, out var round, out var justCrashed) || round is null)
                     continue;
 
-                if (round.IsCrashed)
+                if (justCrashed)
                 {
+                    await SendCrashEvent(round, table.TableId, stoppingToken);
                     _logger.LogInformation(
-                        $"Round {round.RoundId} is crashed at {round.CurrentMultiplier}",
+                        "Round {RoundId} crashed at {Multiplier}",
                         round.RoundId,
-                        round);
+                        round.CurrentMultiplier);
                     continue;
                 }
-                  
-                if (round.CurrentMultiplier >= round.CrashPoint)
-                {
-                    await SendCrashEvent(round,table.TableId);
-                    
-                    _logger.LogInformation(
-                        $"Round {round.RoundId} crashed at {round.CurrentMultiplier}",
-                        round.RoundId,
-                        round);
-                    round.IsCrashed = true;
 
-                    continue;
-                }
-                
-                // INFO[Mahmoud] Bad Design 
-                // if a tick is delayed, there will be lags the next tick sends the correct current multiplier, not just +0.1
-                // PlayerMessageConsumer
-                //     -> RoundEngine channel
-                //     -> bet/cashout commands sequentially
-                //
-                // RoundsTicker
-                //     -> reads active rounds
-                //     -> calculates multiplier by elapsed time
-                //     -> broadcasts tick directly to SignalR
-                //     -> sends crash command when crash point reached
-                //  OR 
-                // Think later on a better design for round Memory shared state 
-                round.CurrentMultiplier += 0.1m;
-
-                await SendTickEvent(round,table.TableId);
-
-                _logger.LogInformation(
-                    $"Round {round.RoundId} tick {round.CurrentMultiplier}",
+                await SendTickEvent(round, table.TableId, stoppingToken);
+                _logger.LogDebug(
+                    "Round {RoundId} tick {Multiplier} sequence {TickSequence}",
                     round.RoundId,
-                    round.CurrentMultiplier,round);
+                    round.CurrentMultiplier,
+                    round.TickSequence);
 
             }
             await Task.Delay(TickInterval, stoppingToken);

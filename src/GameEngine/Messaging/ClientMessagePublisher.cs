@@ -15,6 +15,7 @@ public interface IClientMessagePublisher
 }
 public class ClientMessagePublisher:IClientMessagePublisher,IDisposable
 {
+    private static readonly TimeSpan ConfirmTimeout = TimeSpan.FromSeconds(5);
     
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -25,7 +26,8 @@ public class ClientMessagePublisher:IClientMessagePublisher,IDisposable
     
     private readonly FanoutOptions options;
     private IConnection? connection;
-    private IModel? channel;
+    private IModel? transientChannel;
+    private IModel? reliableChannel;
     private readonly object publishLock = new();
 
     public ClientMessagePublisher(FanoutOptions options)
@@ -48,37 +50,46 @@ public class ClientMessagePublisher:IClientMessagePublisher,IDisposable
         return factory.CreateConnection();
 
     }
-    private IModel GetChannel()
+    private (IModel Transient, IModel Reliable) GetChannels()
     {
-        if (connection?.IsOpen == true && channel?.IsOpen == true)
+        if (connection?.IsOpen == true
+            && transientChannel?.IsOpen == true
+            && reliableChannel?.IsOpen == true)
         {
-            return channel;
+            return (transientChannel, reliableChannel);
         }
 
-        channel?.Dispose();
+        transientChannel?.Dispose();
+        reliableChannel?.Dispose();
         connection?.Dispose();
 
         connection = CreateConnection(options);
-        channel = connection.CreateModel();
+        transientChannel = connection.CreateModel();
+        reliableChannel = connection.CreateModel();
 
-        channel.ExchangeDeclare(
+        ConfigureTopology(transientChannel);
+        ConfigureTopology(reliableChannel);
+        reliableChannel.ConfirmSelect();
+
+        return (transientChannel, reliableChannel);
+    }
+
+    private void ConfigureTopology(IModel rabbitChannel)
+    {
+        rabbitChannel.ExchangeDeclare(
             exchange: options.ExchangeName,
-            type: "direct",
+            type: ExchangeType.Direct,
             durable: true,
-            autoDelete: false
-        );
-        channel.QueueDeclare(
+            autoDelete: false);
+        rabbitChannel.QueueDeclare(
             queue: options.QueueName,
             durable: true,
             exclusive: false,
-            autoDelete: false
-        );
-        channel.QueueBind(
+            autoDelete: false);
+        rabbitChannel.QueueBind(
             queue: options.QueueName,
             exchange: options.ExchangeName,
             routingKey: options.RoutingKey);
-
-        return channel;
     }
 
     public Task PublishAsync(ToClient message, CancellationToken ct)
@@ -88,30 +99,69 @@ public class ClientMessagePublisher:IClientMessagePublisher,IDisposable
         var body = Encoding.UTF8.GetBytes(json);
         lock (publishLock)
         {
-            var rabbitChannel = GetChannel();
-            var properties = rabbitChannel.CreateBasicProperties();
-            properties.Persistent = true;
-            properties.ContentType = "application/json";
-            properties.MessageId = message.MessageId;
-            properties.Type = message.MessageType;
-            properties.Timestamp=new AmqpTimestamp(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            var isTransientTick = message is RoundTick;
+            var maxAttempts = isTransientTick ? 1 : 3;
 
-            // Use message type as the routing key so the message lands in that table's durable queue.
-            rabbitChannel.BasicPublish(
-                exchange: options.ExchangeName,
-                routingKey: options.RoutingKey,
-                mandatory: false,
-                basicProperties: properties,
-                body: body);
+            for (var attempt = 1; attempt <= maxAttempts; attempt++)
+            {
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    Publish(body, message, isTransientTick);
+                    break;
+                }
+                catch when (attempt < maxAttempts)
+                {
+                    // A confirm can be lost after the broker accepted the message. Retrying is
+                    // intentionally at-least-once; MessageId/round sequence let consumers deduplicate.
+                    ResetConnection();
+                    Thread.Sleep(TimeSpan.FromMilliseconds(100 * attempt));
+                }
+            }
         }
         
         return Task.CompletedTask;
 
     }
 
+    private void Publish(byte[] body, ToClient message, bool isTransientTick)
+    {
+        var channels = GetChannels();
+        var rabbitChannel = isTransientTick ? channels.Transient : channels.Reliable;
+        var properties = rabbitChannel.CreateBasicProperties();
+        // Ticks are replaceable snapshots. Lifecycle messages must survive broker restart.
+        properties.Persistent = !isTransientTick;
+        properties.ContentType = "application/json";
+        properties.MessageId = message.MessageId;
+        properties.Type = message.MessageType;
+        properties.Timestamp = new AmqpTimestamp(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+
+        rabbitChannel.BasicPublish(
+            exchange: options.ExchangeName,
+            routingKey: options.RoutingKey,
+            mandatory: !isTransientTick,
+            basicProperties: properties,
+            body: body);
+
+        if (!isTransientTick)
+        {
+            // New-round/crash publication is only complete after the broker confirms it.
+            rabbitChannel.WaitForConfirmsOrDie(ConfirmTimeout);
+        }
+    }
+
+    private void ResetConnection()
+    {
+        transientChannel?.Dispose();
+        reliableChannel?.Dispose();
+        connection?.Dispose();
+        transientChannel = null;
+        reliableChannel = null;
+        connection = null;
+    }
+
     public void Dispose()
     {
-        channel?.Dispose();
-        connection?.Dispose();
+        ResetConnection();
     }
 }

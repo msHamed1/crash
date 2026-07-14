@@ -110,31 +110,27 @@ public sealed class RoundsService : BackgroundService
     private async Task ProcessRoundCrashedCommand(RoundCrashCommand roundCrashCommand, TableRuntimeState table,
         CancellationToken ct)
     {
-        
-        SendRoundCrashedCommand(table, ct);
-        return;
-        
+        if (!IsCurrentRound(table, roundCrashCommand.RoundId))
+            return;
+
+        await SendRoundCrashedCommand(roundCrashCommand, long.Parse(roundCrashCommand.TableId), ct);
     }
     
-    private async Task  SendRoundCrashedCommand(TableRuntimeState table, CancellationToken ct)
+    private async Task SendRoundCrashedCommand(RoundCrashCommand command, long tableId, CancellationToken ct)
     {
-       
-        _logger.LogInformation("Sending Round Crashed {RoundId} for Table {TableId}",table.CurrentRound.RoundId,table);
+        _logger.LogInformation("Sending Round Crashed {RoundId} for Table {TableId}", command.RoundId, tableId);
 
         var message = new RoundCrashed
         {
-            RoundId = table.CurrentRound.RoundId,
-            CurrentMultiplier = table.CurrentRound.CurrentMultiplier,
-            TableId = table.TableId,
-            IsCrashed = table.CurrentRound.IsCrashed,
+            RoundId = long.Parse(command.RoundId),
+            CurrentMultiplier = command.CurrentMultiplier,
+            TableId = tableId,
+            IsCrashed = true,
+            TickSequence = command.TickSequence,
             MessageId = Guid.NewGuid().ToString(),
-            
         };
 
         await _publisher.PublishAsync(message,ct);
-
-
-
     }
     private async Task ProcessPlayerJoinedCommand(PlayerJoinedCommand command, TableRuntimeState table,
         CancellationToken ct)
@@ -153,51 +149,51 @@ public sealed class RoundsService : BackgroundService
             PlayerId = player.Id,
             Balance = player.BalanceInUSD
         });
-        if (table.CurrentRound is null)
+        if (table.GetCurrentRoundSnapshot() is null)
         {
-         await CreateRound(table.TableId,   ct);
-         return;
+            await CreateAndPublishRound(table.TableId, ct);
+            return;
         }
 
-        SendNewRoundCreated(table, ct);
-        return;
+        await SendNewRoundCreated(table, ct);
         
 }
     
     private async Task ProcessNewRoundCommand(NewRoundCommand newRoundCommand, TableRuntimeState table,
         CancellationToken ct)
     {
-        await CreateRound(table.TableId,   ct);
-
-        SendNewRoundCreated(table, ct);
-        return;
+        await CreateAndPublishRound(table.TableId, ct);
         
     }
     
     private async Task ProcessRoundTickCommand(RoundTickCommand command, TableRuntimeState table,
         CancellationToken ct)
     {
-        
-        SendRoundTickCommand(table, ct);
-        return;
-        
+        if (!IsCurrentRound(table, command.RoundId))
+            return;
+
+        await SendRoundTickCommand(command, long.Parse(command.TableId), ct);
     }
 
     private async Task  SendNewRoundCreated(TableRuntimeState table, CancellationToken ct)
     {
        
-            _logger.LogInformation("Sending Round {RoundId} for Table {TableId}",table.CurrentRound.RoundId,table);
+        var round = table.GetCurrentRoundSnapshot();
+        if (round is null)
+            return;
 
-            var message = new NewRoundInfo
-            {
-               RoundId = table.CurrentRound.RoundId,
-               CurrentMultiplier = table.CurrentRound.CurrentMultiplier,
-               StartsAt = table.CurrentRound.StartsAt,
-               IsCrashed = table.CurrentRound.IsCrashed,
-               TableId = table.TableId,
-               MessageId = Guid.NewGuid().ToString(),
+        _logger.LogInformation("Sending Round {RoundId} for Table {TableId}", round.RoundId, table.TableId);
 
-            };
+        var message = new NewRoundInfo
+        {
+            RoundId = round.RoundId,
+            CurrentMultiplier = round.CurrentMultiplier,
+            StartsAt = round.StartsAt,
+            IsCrashed = round.IsCrashed,
+            TableId = table.TableId,
+            MessageId = Guid.NewGuid().ToString(),
+
+        };
 
         await _publisher.PublishAsync(message,ct);
 
@@ -207,16 +203,14 @@ public sealed class RoundsService : BackgroundService
     
     
     
-    private async Task  SendRoundTickCommand(TableRuntimeState table, CancellationToken ct)
+    private async Task SendRoundTickCommand(RoundTickCommand command, long tableId, CancellationToken ct)
     {
-       
-        _logger.LogInformation("Sending Round {RoundId} for Table {TableId}",table.CurrentRound.RoundId,table);
-
         var message = new RoundTick
         {
-            RoundId = table.CurrentRound.RoundId,
-            CurrentMultiplier = table.CurrentRound.CurrentMultiplier,
-            TableId = table.TableId,
+            RoundId = long.Parse(command.RoundId),
+            CurrentMultiplier = command.CurrentMultiplier,
+            TableId = tableId,
+            TickSequence = command.TickSequence,
             MessageId = Guid.NewGuid().ToString(),
 
         };
@@ -228,7 +222,7 @@ public sealed class RoundsService : BackgroundService
     }
    
 
-    private async Task<Round?> CreateRound(long tableId,CancellationToken ct)
+    private async Task<Round?> CreateAndPublishRound(long tableId,CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var repo= scope.ServiceProvider.GetRequiredService<IRoundRepository>();
@@ -262,17 +256,18 @@ public sealed class RoundsService : BackgroundService
     {
         RoundId = round.Id,
         CrashPoint = (decimal)rngEntropy.CrashPoint,
-        CurrentMultiplier = 1.1m,
         StartsAt = round.StartTime,
-        IsCrashed = false,
-        
-
-
     });
 
-    SendNewRoundCreated(table, ct);
+    await SendNewRoundCreated(table, ct);
      return updatedRound;
 
 
+    }
+
+    private static bool IsCurrentRound(TableRuntimeState table, string commandRoundId)
+    {
+        return long.TryParse(commandRoundId, out var roundId)
+               && table.GetCurrentRoundSnapshot()?.RoundId == roundId;
     }
 }

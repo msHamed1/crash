@@ -117,6 +117,50 @@
       border-left-color: #c62828;
     }
 
+    .round-state.running {
+      border-left-color: #12a150;
+      box-shadow: 0 8px 26px rgba(18, 161, 80, 0.12);
+    }
+
+    .round-state.betting {
+      border-left-color: #ef9b0f;
+    }
+
+    #currentMultiplier {
+      font-size: clamp(30px, 7vw, 64px);
+      font-variant-numeric: tabular-nums;
+      transition: color 120ms ease, transform 120ms ease;
+    }
+
+    .round-state.crashed #currentMultiplier {
+      color: #c62828;
+      transform: scale(1.04);
+    }
+
+    .stream-health {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #637083;
+      font-size: 13px;
+    }
+
+    .stream-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #9aa5b1;
+    }
+
+    .stream-dot.live {
+      background: #12a150;
+      box-shadow: 0 0 0 4px rgba(18, 161, 80, 0.12);
+    }
+
+    .stream-dot.stale {
+      background: #c62828;
+    }
+
     pre {
       min-height: 180px;
       margin: 0;
@@ -191,6 +235,10 @@
           <span id="roundPhase">Waiting</span>
         </div>
       </div>
+      <div class="stream-health">
+        <span id="streamDot" class="stream-dot"></span>
+        <span id="streamHealth">Waiting for round data</span>
+      </div>
     </section>
 
     <section>
@@ -221,6 +269,10 @@
   <script>
     let connection = null;
     let loginSession = null;
+    let roundView = createEmptyRoundView();
+    let displayedMultiplier = 1;
+    let multiplierAnimationFrame = null;
+    const receivedMessageIds = new Set();
 
     const connectButton = document.getElementById("connectButton");
     const sendBetButton = document.getElementById("sendBetButton");
@@ -231,6 +283,8 @@
     const currentMultiplierElement = document.getElementById("currentMultiplier");
     const liveTableIdElement = document.getElementById("liveTableId");
     const roundPhaseElement = document.getElementById("roundPhase");
+    const streamDotElement = document.getElementById("streamDot");
+    const streamHealthElement = document.getElementById("streamHealth");
 
     connectButton.addEventListener("click", connect);
     sendBetButton.addEventListener("click", sendBet);
@@ -276,19 +330,21 @@
         connection.onreconnecting(() => {
           setStatus("reconnecting");
           sendBetButton.disabled = true;
+          setStreamHealth("stale", "Realtime stream reconnecting");
         });
         connection.onreconnected(() => {
           setStatus("connected");
-          sendBetButton.disabled = false;
+          refreshBetAvailability();
         });
         connection.onclose(() => {
           setStatus("disconnected");
           sendBetButton.disabled = true;
+          setStreamHealth("stale", "Realtime stream disconnected");
         });
 
         await connection.start();
         setStatus(`connected as ${loginSession.player.externalId} on table ${loginSession.player.tableId}`);
-        sendBetButton.disabled = false;
+        refreshBetAvailability();
       } finally {
         connectButton.disabled = false;
       }
@@ -299,10 +355,14 @@
         return;
       }
 
+      if (!roundView.roundId || roundView.phase !== "Betting") {
+        throw new Error("Bets are accepted only during the betting phase of an active round.");
+      }
+
       const message = {
         correlationId: "new-"+ String(Date.now()),
         clientSentAtUtc: new Date().toISOString(),
-        roundId: String(Date.now()),
+        roundId: String(roundView.roundId),
         amount: Number(getValue("amount")),
         currency: getValue("currency"),
         autoCashoutEnabled: true,
@@ -316,46 +376,173 @@
 
     function registerServerMessageHandlers(hubConnection) {
       hubConnection.on("NewRoundInfo", message => {
-        updateRoundState(message, "Running");
-        appendLog("received NewRoundInfo", message);
+        acceptRoundMessage(message, "NewRoundInfo");
       });
 
       hubConnection.on("RoundTick", message => {
-        updateRoundState(message, "Running");
-        appendLog("received RoundTick", message);
+        acceptRoundMessage(message, "RoundTick");
       });
 
       hubConnection.on("RoundCrashed", message => {
-        updateRoundState(message, "Crashed");
-        appendLog("received RoundCrashed", message);
+        acceptRoundMessage(message, "RoundCrashed");
       });
 
       hubConnection.on("CurrentState", message => {
-        updateRoundState(message, isCrashed(message) ? "Crashed" : "Running");
-        appendLog("received CurrentState", message);
+        acceptRoundMessage(message, "CurrentState");
       });
     }
 
-    function updateRoundState(message, phase) {
+    function acceptRoundMessage(message, messageType) {
+      const messageId = readField(message, "messageId", "MessageId");
+      if (messageId && receivedMessageIds.has(messageId)) {
+        return;
+      }
+      if (messageId) {
+        receivedMessageIds.add(messageId);
+        if (receivedMessageIds.size > 500) {
+          receivedMessageIds.delete(receivedMessageIds.values().next().value);
+        }
+      }
+
       const roundId = readField(message, "roundId", "RoundId");
       const tableId = readField(message, "tableId", "TableId");
       const multiplier = readField(message, "currentMultiplier", "CurrentMultiplier");
-      const crashed = isCrashed(message) || phase === "Crashed";
+      const sequence = Number(readField(message, "tickSequence", "TickSequence") ?? 0);
+      const startsAtValue = readField(message, "startsAt", "StartsAt");
 
-      if (roundId !== undefined && roundId !== null) {
-        roundIdElement.textContent = String(roundId);
+      if (roundId === undefined || roundId === null) {
+        appendLog("ignored invalid server message", { messageType, reason: "roundId is missing" });
+        return;
       }
 
-      if (tableId !== undefined && tableId !== null) {
-        liveTableIdElement.textContent = String(tableId);
+      const normalizedRoundId = String(roundId);
+      const isNewRound = roundView.roundId !== normalizedRoundId;
+
+      // RabbitMQ/SignalR reconnects can redeliver messages. Never move the UI backwards.
+      if (isNewRound && roundView.roundId && compareRoundIds(normalizedRoundId, roundView.roundId) < 0) {
+        return;
+      }
+      if (!isNewRound && messageType === "NewRoundInfo" && roundView.sequence > 0) {
+        return;
+      }
+      if (!isNewRound && messageType !== "NewRoundInfo" && sequence <= roundView.sequence) {
+        return;
       }
 
-      if (multiplier !== undefined && multiplier !== null) {
-        currentMultiplierElement.textContent = `${Number(multiplier).toFixed(2)}x`;
+      if (isNewRound) {
+        roundView = createEmptyRoundView();
+        roundView.roundId = normalizedRoundId;
+        displayedMultiplier = 1;
       }
 
-      roundPhaseElement.textContent = crashed ? "Crashed" : phase;
-      roundStateElement.classList.toggle("crashed", crashed);
+      roundView.tableId = tableId ?? roundView.tableId;
+      roundView.sequence = Math.max(roundView.sequence, sequence);
+      roundView.multiplier = toValidMultiplier(multiplier, roundView.multiplier);
+      roundView.startsAt = startsAtValue ? new Date(startsAtValue) : roundView.startsAt;
+      roundView.lastMessageAt = Date.now();
+      roundView.phase = resolvePhase(messageType, message);
+
+      renderRoundView();
+      if (roundView.phase === "Crashed") {
+        if (multiplierAnimationFrame) {
+          cancelAnimationFrame(multiplierAnimationFrame);
+        }
+        displayedMultiplier = roundView.multiplier;
+        currentMultiplierElement.textContent = `${displayedMultiplier.toFixed(2)}x`;
+      } else {
+        animateMultiplier();
+      }
+      setStreamHealth("live", `Live · tick ${roundView.sequence}`);
+
+      // Logging every 50 ms eventually freezes the page; sample ticks but retain lifecycle events.
+      if (messageType !== "RoundTick" || sequence % 20 === 0) {
+        appendLog(`received ${messageType}`, message);
+      }
+    }
+
+    function resolvePhase(messageType, message) {
+      if (messageType === "RoundCrashed" || isCrashed(message)) {
+        return "Crashed";
+      }
+      if (messageType === "RoundTick") {
+        return "Running";
+      }
+      return roundView.startsAt && roundView.startsAt.getTime() > Date.now() ? "Betting" : "Running";
+    }
+
+    function renderRoundView() {
+      roundIdElement.textContent = roundView.roundId ?? "-";
+      liveTableIdElement.textContent = roundView.tableId ?? "-";
+      roundPhaseElement.textContent = phaseLabel();
+      roundStateElement.classList.toggle("crashed", roundView.phase === "Crashed");
+      roundStateElement.classList.toggle("running", roundView.phase === "Running");
+      roundStateElement.classList.toggle("betting", roundView.phase === "Betting");
+      refreshBetAvailability();
+    }
+
+    function phaseLabel() {
+      if (roundView.phase !== "Betting" || !roundView.startsAt) {
+        return roundView.phase;
+      }
+      const seconds = Math.max(0, (roundView.startsAt.getTime() - Date.now()) / 1000);
+      return seconds > 0 ? `Betting · ${seconds.toFixed(1)}s` : "Starting";
+    }
+
+    function animateMultiplier() {
+      if (multiplierAnimationFrame) {
+        cancelAnimationFrame(multiplierAnimationFrame);
+      }
+
+      const animate = () => {
+        const difference = roundView.multiplier - displayedMultiplier;
+        displayedMultiplier = Math.abs(difference) < 0.005
+          ? roundView.multiplier
+          : displayedMultiplier + difference * 0.35;
+        currentMultiplierElement.textContent = `${displayedMultiplier.toFixed(2)}x`;
+
+        if (displayedMultiplier !== roundView.multiplier) {
+          multiplierAnimationFrame = requestAnimationFrame(animate);
+        }
+      };
+      multiplierAnimationFrame = requestAnimationFrame(animate);
+    }
+
+    function refreshBetAvailability() {
+      sendBetButton.disabled = connection?.state !== signalR.HubConnectionState.Connected
+        || roundView.phase !== "Betting";
+    }
+
+    function setStreamHealth(state, text) {
+      streamDotElement.className = `stream-dot ${state}`;
+      streamHealthElement.textContent = text;
+    }
+
+    function toValidMultiplier(value, fallback) {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) && parsed >= 1 ? parsed : fallback;
+    }
+
+    function compareRoundIds(left, right) {
+      try {
+        const leftId = BigInt(left);
+        const rightId = BigInt(right);
+        return leftId === rightId ? 0 : leftId > rightId ? 1 : -1;
+      } catch {
+        // Non-numeric IDs are not orderable; the server sequence still protects a single round.
+        return 0;
+      }
+    }
+
+    function createEmptyRoundView() {
+      return {
+        roundId: null,
+        tableId: null,
+        multiplier: 1,
+        sequence: -1,
+        startsAt: null,
+        phase: "Waiting",
+        lastMessageAt: 0
+      };
     }
 
     function isCrashed(message) {
@@ -396,6 +583,19 @@
       setStatus("error");
       appendLog("error", event.reason?.message ?? String(event.reason));
     });
+
+    setInterval(() => {
+      if (roundView.phase === "Betting") {
+        if (roundView.startsAt && roundView.startsAt.getTime() <= Date.now()) {
+          roundView.phase = "Starting";
+        }
+        renderRoundView();
+      }
+
+      if (roundView.phase === "Running" && Date.now() - roundView.lastMessageAt > 1500) {
+        setStreamHealth("stale", "Tick stream delayed");
+      }
+    }, 100);
   </script>
 </body>
 </html>

@@ -32,6 +32,7 @@ public sealed record RoundTickCommand : RoundCommand
     // string TableId,
     // string RoundId,
     public decimal CurrentMultiplier {get; set; }
+    public long TickSequence { get; init; }
     public override string MessageType => "Tick";
 }
 
@@ -40,6 +41,7 @@ public sealed record RoundCrashCommand : RoundCommand
     // string TableId,
     // string RoundId,
     public decimal CurrentMultiplier {get; set; }
+    public long TickSequence { get; init; }
     public override string MessageType => "Crash";
 
 }
@@ -58,7 +60,3 @@ public sealed record NewRoundCommand : RoundCommand
 {
     public override string MessageType => "New";
 }
-
-
-    
-    

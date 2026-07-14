@@ -37,6 +37,7 @@ public record RoundTick :ToClient
     public override string MessageType => "RoundTick";
     public long RoundId { get; init; }
     public decimal CurrentMultiplier { get; init; }
+    public long TickSequence { get; init; }
     
 }
 
@@ -47,5 +48,6 @@ public record RoundCrashed: ToClient
     public required long RoundId { get; set; }
     public decimal CurrentMultiplier { get; set; } = 1.00m;
     public bool IsCrashed { get; set; }
+    public long TickSequence { get; init; }
 
  }

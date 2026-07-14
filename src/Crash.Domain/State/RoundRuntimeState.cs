@@ -13,7 +13,19 @@ public sealed class RoundRuntimeState
 {
     public required long RoundId { get; init; }
     public required decimal CrashPoint { get; init; }
-    public decimal CurrentMultiplier { get; set; } = 1.00m;
+    public decimal CurrentMultiplier { get; internal set; } = 1.00m;
     public DateTimeOffset StartsAt { get; init; }
-    public bool IsCrashed { get; set; }
+    public bool IsCrashed { get; internal set; }
+    public long TickSequence { get; internal set; }
 }
+
+/// <summary>
+/// Immutable copy used when a round update crosses service/thread boundaries.
+/// A delayed command can therefore never accidentally read a newer round.
+/// </summary>
+public sealed record RoundRuntimeSnapshot(
+    long RoundId,
+    decimal CurrentMultiplier,
+    DateTimeOffset StartsAt,
+    bool IsCrashed,
+    long TickSequence);
