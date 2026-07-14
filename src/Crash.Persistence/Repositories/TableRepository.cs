@@ -134,6 +134,23 @@ public class TableRepository:ITableRepository
 
     public async Task<Table> GetOrCreateTableForPlayer(Player player, CancellationToken ct)
     {
+        // Login/reconnect must be idempotent. Moving an existing player to a new table changes
+        // their SignalR group and makes the browser miss lifecycle events from the active round.
+        if (player.TableId is { } existingTableId)
+        {
+            var existingTable = await _db.Tables
+                .AsNoTracking()
+                .Include(t => t.Players)
+                .FirstOrDefaultAsync(t => t.Id == existingTableId, ct);
+
+            if (existingTable is not null)
+                return existingTable;
+
+            // Heal a stale foreign key before assigning a replacement table.
+            player.TableId = null;
+            await _db.SaveChangesAsync(ct);
+        }
+
         // We need tp reserve seat in table atomically;
         // 1. Try to find an active table with free seat
         // 2. Safely increment PlayersCount

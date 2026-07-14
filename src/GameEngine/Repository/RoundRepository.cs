@@ -13,6 +13,8 @@ public interface IRoundRepository
     Task<Round> CreateRoundAsync(long tableId, long fToken, CancellationToken ct);
     
     Task<Round?> UpdateRoundEntropyAsync(long roundId,decimal crashPoints, string rngId,  CancellationToken ct);
+    Task<bool> MarkRunningAsync(long roundId, long tableId, long fencingToken, CancellationToken ct);
+    Task<bool> MarkCrashedAsync(long roundId, long tableId, long fencingToken, CancellationToken ct);
 }
 public class RoundRepository:IRoundRepository
 {
@@ -82,11 +84,54 @@ public class RoundRepository:IRoundRepository
         await _db.Rounds.Where(t=>t.Id==roundId) .ExecuteUpdateAsync(setters => setters
                 .SetProperty(r => r.CrashPoints, crashPoints)
                 .SetProperty(r => r.RngId, rngId)
+                .SetProperty(r => r.Status, RoundStatus.Betting)
                  .SetProperty(r => r.UpdatedAt, DateTimeOffset.UtcNow),
             ct);
         
         return await _db.Rounds
             .FirstOrDefaultAsync(r => r.Id == roundId, ct);
         
+    }
+
+    public async Task<bool> MarkRunningAsync(
+        long roundId,
+        long tableId,
+        long fencingToken,
+        CancellationToken ct)
+    {
+        var affected = await _db.Rounds
+            .Where(r => r.Id == roundId
+                        && r.TableId == tableId
+                        && r.FencingToken == fencingToken
+                        && (r.Status == RoundStatus.Pending || r.Status == RoundStatus.Betting))
+            .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(r => r.Status, RoundStatus.Running)
+                    .SetProperty(r => r.UpdatedAt, DateTimeOffset.UtcNow),
+                ct);
+
+        return affected == 1;
+    }
+
+    public async Task<bool> MarkCrashedAsync(
+        long roundId,
+        long tableId,
+        long fencingToken,
+        CancellationToken ct)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var affected = await _db.Rounds
+            .Where(r => r.Id == roundId
+                        && r.TableId == tableId
+                        && r.FencingToken == fencingToken
+                        && (r.Status == RoundStatus.Pending
+                            || r.Status == RoundStatus.Betting
+                            || r.Status == RoundStatus.Running))
+            .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(r => r.Status, RoundStatus.Crashed)
+                    .SetProperty(r => r.EndTime, now)
+                    .SetProperty(r => r.UpdatedAt, now),
+                ct);
+
+        return affected == 1;
     }
 }

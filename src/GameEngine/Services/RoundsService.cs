@@ -18,7 +18,8 @@ public sealed class RoundsService : BackgroundService
     private readonly ILogger<RoundsService> _logger;
     private readonly GameEngineOptions _options;
     private readonly IServiceScopeFactory _scopeFactory;
-    private readonly Channel<RoundCommand> _channel;
+    private readonly Channel<RoundCommand> _lifecycleChannel;
+    private readonly Channel<RoundTickCommand> _tickChannel;
     private readonly IClientMessagePublisher _publisher;
 
 
@@ -30,29 +31,40 @@ public sealed class RoundsService : BackgroundService
         _options = options;
         _publisher = publisher;
         _rngClient = rngClient;
-        _channel = Channel.CreateUnbounded<RoundCommand>(new UnboundedChannelOptions
+        _lifecycleChannel = Channel.CreateUnbounded<RoundCommand>(new UnboundedChannelOptions
         {
             SingleReader = true,
             SingleWriter = false
+        });
+        _tickChannel = Channel.CreateBounded<RoundTickCommand>(new BoundedChannelOptions(1024)
+        {
+            SingleReader = true,
+            SingleWriter = false,
+            FullMode = BoundedChannelFullMode.DropOldest
         });
     }
 
     public ValueTask  EnqueueAsync(RoundCommand command, CancellationToken ct=default)
     {
-        return _channel.Writer.WriteAsync(command, ct);
+        return command is RoundTickCommand tick
+            ? _tickChannel.Writer.WriteAsync(tick, ct)
+            : _lifecycleChannel.Writer.WriteAsync(command, ct);
         
     }
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            await foreach (var message in _channel.Reader.ReadAllAsync(stoppingToken))
-            {
-                await ProcessMessage(message, stoppingToken);
-            }
-        }
+        await Task.WhenAll(
+            ProcessChannelAsync(_lifecycleChannel.Reader, stoppingToken),
+            ProcessChannelAsync(_tickChannel.Reader, stoppingToken));
+    }
 
-        return;
+    private async Task ProcessChannelAsync<TCommand>(ChannelReader<TCommand> reader, CancellationToken ct)
+        where TCommand : RoundCommand
+    {
+        await foreach (var message in reader.ReadAllAsync(ct))
+        {
+            await ProcessMessage(message, ct);
+        }
     }
 
    private async Task ProcessMessage(RoundCommand command, CancellationToken ct)
@@ -60,7 +72,21 @@ public sealed class RoundsService : BackgroundService
 
         try
         {
-            _logger.LogInformation("Processing Table {TableId}", command.TableId,command );
+            if (command is RoundTickCommand tick)
+            {
+                _logger.LogDebug(
+                    "Processing tick {TickSequence} for round {RoundId}, table {TableId}",
+                    tick.TickSequence,
+                    tick.RoundId,
+                    tick.TableId);
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "Processing {MessageType} for table {TableId}",
+                    command.MessageType,
+                    command.TableId);
+            }
             _options.Tables.TryGetValue(long.Parse(command.TableId), out var table);
             if (table is null)
             {
@@ -113,7 +139,21 @@ public sealed class RoundsService : BackgroundService
         if (!IsCurrentRound(table, roundCrashCommand.RoundId))
             return;
 
-        await SendRoundCrashedCommand(roundCrashCommand, long.Parse(roundCrashCommand.TableId), ct);
+        using var scope = _scopeFactory.CreateScope();
+        var repository = scope.ServiceProvider.GetRequiredService<IRoundRepository>();
+        var roundId = long.Parse(roundCrashCommand.RoundId);
+        var tableId = long.Parse(roundCrashCommand.TableId);
+        var persisted = await repository.MarkCrashedAsync(roundId, tableId, table.FencingToken, ct);
+        if (!persisted)
+        {
+            throw new InvalidOperationException(
+                $"Could not mark round {roundId} as crashed because its fencing token or state is stale.");
+        }
+
+        await SendRoundCrashedCommand(roundCrashCommand, tableId, ct);
+        // A new round may only be created after the previous crash is fenced, persisted,
+        // and published. Otherwise a failed crash transition can be silently skipped.
+        await EnqueueAsync(new NewRoundCommand { TableId = tableId.ToString() }, ct);
     }
     
     private async Task SendRoundCrashedCommand(RoundCrashCommand command, long tableId, CancellationToken ct)
@@ -171,6 +211,17 @@ public sealed class RoundsService : BackgroundService
     {
         if (!IsCurrentRound(table, command.RoundId))
             return;
+
+        if (command.TickSequence == 1)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var repository = scope.ServiceProvider.GetRequiredService<IRoundRepository>();
+            await repository.MarkRunningAsync(
+                long.Parse(command.RoundId),
+                long.Parse(command.TableId),
+                table.FencingToken,
+                ct);
+        }
 
         await SendRoundTickCommand(command, long.Parse(command.TableId), ct);
     }

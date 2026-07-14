@@ -36,16 +36,8 @@ public sealed class RoundsTicker:BackgroundService
             TableId = tableId.ToString(),
             TickSequence = round.TickSequence
 
-        };
-       await _roundsService.EnqueueAsync(envelop, ct);
-
-       var newRoundCommand = new NewRoundCommand()
-       {
-           TableId = tableId.ToString(),
        };
-       await _roundsService.EnqueueAsync(newRoundCommand, ct);
-       
-        
+       await _roundsService.EnqueueAsync(envelop, ct);
     }
     
     

@@ -25,10 +25,13 @@ public class ClientMessagePublisher:IClientMessagePublisher,IDisposable
     
     
     private readonly FanoutOptions options;
-    private IConnection? connection;
+    private IConnection? transientConnection;
+    private IConnection? reliableConnection;
     private IModel? transientChannel;
     private IModel? reliableChannel;
-    private readonly object publishLock = new();
+    private readonly object transientPublishLock = new();
+    private readonly SemaphoreSlim reliablePublishGate = new(1, 1);
+    private TaskCompletionSource<bool>? pendingReliableConfirm;
 
     public ClientMessagePublisher(FanoutOptions options)
     {
@@ -50,28 +53,42 @@ public class ClientMessagePublisher:IClientMessagePublisher,IDisposable
         return factory.CreateConnection();
 
     }
-    private (IModel Transient, IModel Reliable) GetChannels()
+    private IModel GetTransientChannel()
     {
-        if (connection?.IsOpen == true
-            && transientChannel?.IsOpen == true
-            && reliableChannel?.IsOpen == true)
-        {
-            return (transientChannel, reliableChannel);
-        }
+        if (transientConnection?.IsOpen == true && transientChannel?.IsOpen == true)
+            return transientChannel;
 
         transientChannel?.Dispose();
-        reliableChannel?.Dispose();
-        connection?.Dispose();
-
-        connection = CreateConnection(options);
-        transientChannel = connection.CreateModel();
-        reliableChannel = connection.CreateModel();
-
+        transientConnection?.Dispose();
+        transientConnection = CreateConnection(options);
+        transientChannel = transientConnection.CreateModel();
         ConfigureTopology(transientChannel);
+        return transientChannel;
+    }
+
+    private IModel GetReliableChannel()
+    {
+        if (reliableConnection?.IsOpen == true && reliableChannel?.IsOpen == true)
+            return reliableChannel;
+
+        reliableChannel?.Dispose();
+        reliableConnection?.Dispose();
+        reliableConnection = CreateConnection(options);
+        reliableChannel = reliableConnection.CreateModel();
         ConfigureTopology(reliableChannel);
         reliableChannel.ConfirmSelect();
-
-        return (transientChannel, reliableChannel);
+        var confirmingChannel = reliableChannel;
+        reliableChannel.BasicAcks += (_, _) =>
+        {
+            if (ReferenceEquals(reliableChannel, confirmingChannel))
+                pendingReliableConfirm?.TrySetResult(true);
+        };
+        reliableChannel.BasicNacks += (_, _) =>
+        {
+            if (ReferenceEquals(reliableChannel, confirmingChannel))
+                pendingReliableConfirm?.TrySetResult(false);
+        };
+        return reliableChannel;
     }
 
     private void ConfigureTopology(IModel rabbitChannel)
@@ -92,45 +109,76 @@ public class ClientMessagePublisher:IClientMessagePublisher,IDisposable
             routingKey: options.RoutingKey);
     }
 
-    public Task PublishAsync(ToClient message, CancellationToken ct)
+    public async Task PublishAsync(ToClient message, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         var json = JsonSerializer.Serialize(message, message.GetType(), JsonOptions);
         var body = Encoding.UTF8.GetBytes(json);
-        lock (publishLock)
-        {
-            var isTransientTick = message is RoundTick;
-            var maxAttempts = isTransientTick ? 1 : 3;
+        var isTransientTick = message is RoundTick;
 
-            for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        if (isTransientTick)
+        {
+            lock (transientPublishLock)
+            {
+                try
+                {
+                    PublishTransient(body, message);
+                }
+                catch
+                {
+                    ResetTransientConnection();
+                    throw;
+                }
+            }
+            return;
+        }
+
+        await reliablePublishGate.WaitAsync(ct);
+        try
+        {
+            for (var attempt = 1; attempt <= 3; attempt++)
             {
                 ct.ThrowIfCancellationRequested();
                 try
                 {
-                    Publish(body, message, isTransientTick);
-                    break;
+                    var rabbitChannel = GetReliableChannel();
+                    var confirm = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    pendingReliableConfirm = confirm;
+                    PublishReliable(rabbitChannel, body, message);
+
+                    var wasAcknowledged = await confirm.Task.WaitAsync(ConfirmTimeout, ct);
+                    if (!wasAcknowledged)
+                        throw new IOException($"RabbitMQ rejected {message.MessageType} message {message.MessageId}.");
+
+                    return;
                 }
-                catch when (attempt < maxAttempts)
+                catch when (attempt < 3)
                 {
                     // A confirm can be lost after the broker accepted the message. Retrying is
                     // intentionally at-least-once; MessageId/round sequence let consumers deduplicate.
-                    ResetConnection();
-                    Thread.Sleep(TimeSpan.FromMilliseconds(100 * attempt));
+                    ResetReliableConnection();
+                    await Task.Delay(TimeSpan.FromMilliseconds(100 * attempt), ct);
+                }
+                catch
+                {
+                    ResetReliableConnection();
+                    throw;
                 }
             }
         }
-        
-        return Task.CompletedTask;
+        finally
+        {
+            pendingReliableConfirm = null;
+            reliablePublishGate.Release();
+        }
 
     }
 
-    private void Publish(byte[] body, ToClient message, bool isTransientTick)
+    private void PublishTransient(byte[] body, ToClient message)
     {
-        var channels = GetChannels();
-        var rabbitChannel = isTransientTick ? channels.Transient : channels.Reliable;
+        var rabbitChannel = GetTransientChannel();
         var properties = rabbitChannel.CreateBasicProperties();
-        // Ticks are replaceable snapshots. Lifecycle messages must survive broker restart.
-        properties.Persistent = !isTransientTick;
+        properties.Persistent = false;
         properties.ContentType = "application/json";
         properties.MessageId = message.MessageId;
         properties.Type = message.MessageType;
@@ -139,29 +187,51 @@ public class ClientMessagePublisher:IClientMessagePublisher,IDisposable
         rabbitChannel.BasicPublish(
             exchange: options.ExchangeName,
             routingKey: options.RoutingKey,
-            mandatory: !isTransientTick,
+            mandatory: false,
             basicProperties: properties,
             body: body);
-
-        if (!isTransientTick)
-        {
-            // New-round/crash publication is only complete after the broker confirms it.
-            rabbitChannel.WaitForConfirmsOrDie(ConfirmTimeout);
-        }
     }
 
-    private void ResetConnection()
+    private void PublishReliable(IModel rabbitChannel, byte[] body, ToClient message)
+    {
+        var properties = rabbitChannel.CreateBasicProperties();
+        properties.Persistent = true;
+        properties.ContentType = "application/json";
+        properties.MessageId = message.MessageId;
+        properties.Type = message.MessageType;
+        properties.Timestamp = new AmqpTimestamp(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+
+        rabbitChannel.BasicPublish(
+            exchange: options.ExchangeName,
+            routingKey: options.RoutingKey,
+            mandatory: true,
+            basicProperties: properties,
+            body: body);
+    }
+
+    private void ResetTransientConnection()
     {
         transientChannel?.Dispose();
-        reliableChannel?.Dispose();
-        connection?.Dispose();
+        transientConnection?.Dispose();
         transientChannel = null;
+        transientConnection = null;
+    }
+
+    private void ResetReliableConnection()
+    {
+        reliableChannel?.Dispose();
+        reliableConnection?.Dispose();
         reliableChannel = null;
-        connection = null;
+        reliableConnection = null;
     }
 
     public void Dispose()
     {
-        ResetConnection();
+        lock (transientPublishLock)
+        {
+            ResetTransientConnection();
+        }
+        ResetReliableConnection();
+        reliablePublishGate.Dispose();
     }
 }

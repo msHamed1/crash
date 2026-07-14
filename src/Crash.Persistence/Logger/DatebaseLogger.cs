@@ -65,8 +65,9 @@ public sealed class DatebaseLogger :ILogger
 
     public bool IsEnabled(LogLevel logLevel)
     {
-        return true;
-        //return logLevel >= LogLevel.Warning && logLevel != LogLevel.None;
+        // Database writes are synchronous in this provider. Persisting Information/Debug logs
+        // from the 50 ms round loop can block the game engine and must never be on the hot path.
+        return logLevel >= LogLevel.Warning && logLevel != LogLevel.None;
     }
 
     public IDisposable? BeginScope<TState>(TState state) where TState : notnull
