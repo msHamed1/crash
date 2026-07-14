@@ -80,7 +80,7 @@ public sealed class RoundsTicker:BackgroundService
                 }
 
                 await SendTickEvent(round, table.TableId, stoppingToken);
-                _logger.LogDebug(
+                _logger.LogInformation(
                     "Round {RoundId} tick {Multiplier} sequence {TickSequence}",
                     round.RoundId,
                     round.CurrentMultiplier,

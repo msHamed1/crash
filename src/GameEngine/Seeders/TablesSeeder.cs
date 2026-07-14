@@ -32,19 +32,19 @@ public sealed class TablesSeeder : IDatabaseSeeder
                 TableName = "Crash Table 1",
                 Rounds= new List<Round>()  ,
                 
-            },
-            new Table
-            {
-                TableName = "Crash Table 2",
-                Rounds= new List<Round>()  ,
-
-            },
-            new Table
-            {
-                TableName = "Crash Table 3",
-                Rounds= new List<Round>()  ,
-
             }
+            // new Table
+            // {
+            //     TableName = "Crash Table 2",
+            //     Rounds= new List<Round>()  ,
+            //
+            // },
+            // new Table
+            // {
+            //     TableName = "Crash Table 3",
+            //     Rounds= new List<Round>()  ,
+            //
+            // }
         );
 
         await _db.SaveChangesAsync(ct);

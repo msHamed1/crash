@@ -153,7 +153,7 @@ public sealed class RoundsService : BackgroundService
         await SendRoundCrashedCommand(roundCrashCommand, tableId, ct);
         // A new round may only be created after the previous crash is fenced, persisted,
         // and published. Otherwise a failed crash transition can be silently skipped.
-        await Task.Delay(10000,ct);// Add Delay of 10 sec. 
+        await Task.Delay(5000,ct);// Add Delay of 5 sec. 
         await EnqueueAsync(new NewRoundCommand { TableId = tableId.ToString() }, ct);
     }
     
@@ -309,7 +309,10 @@ public sealed class RoundsService : BackgroundService
         RoundId = round.Id,
         CrashPoint = (decimal)rngEntropy.CrashPoint,
         StartsAt = round.StartTime,
+        
     });
+    var currentRound = table.GetCurrentRoundSnapshot();
+    _logger.LogInformation("Current Round is",currentRound);
 
     await SendNewRoundCreated(table, ct);
      return updatedRound;

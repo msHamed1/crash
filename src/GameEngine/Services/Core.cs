@@ -85,8 +85,12 @@ public class Core:BackgroundService
 
                 // Always overwrite the local fencing token with the DB-confirmed value.
                 // If another engine won the lease race, RenewOwnership returns null instead.
-                _options.Tables[tableEntity.Id] = new TableRuntimeState(tableEntity.Id);
-                _options.Tables[tableEntity.Id].SetFencingToken(tableEntity.FencingToken);
+                
+                // BUG Do not distroy the current memory Table snapshot
+                // _options.Tables[tableEntity.Id] = new TableRuntimeState(tableEntity.Id);
+                // _options.Tables[tableEntity.Id].SetFencingToken(tableEntity.FencingToken);
+                 table.Value.SetFencingToken(tableEntity.FencingToken);
+
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -104,9 +108,15 @@ public class Core:BackgroundService
         {
             // Adding the table here is enough for PlayerMessageConsumer to start consuming
             // the durable table queue without restarting this process.
-            _options.Tables[newTable.Id] = new TableRuntimeState(newTable.Id);
-            _options.Tables[newTable.Id].SetFencingToken(newTable.FencingToken);
-
+            
+            // TODO  Recover the active round from the database or durable event stream.
+            // If database renewal repeatedly throws, the engine keeps operating even after its lease may have expired. Track the locally confirmed LeaseExpiresAt and stop processing when it passes.
+            // Only one table is acquired every 15 seconds. Consider acquiring repeatedly until capacity is reached.
+            // Put Task.Delay inside the cancellation handling.
+           _options.Tables[newTable.Id] = new TableRuntimeState(newTable.Id);
+           _options.Tables[newTable.Id].SetFencingToken(newTable.FencingToken);
+           
+             
             _logger.LogInformation(
                 "Game engine {EngineId} acquired ownership for table {TableId} with fencing token {FencingToken}.",
                 _options.EngineId,
