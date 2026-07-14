@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Crash.Domain.Contracts.Commands;
 using Crash.Domain.Options;
 using Crash.Domain.State;
@@ -9,22 +10,41 @@ public sealed class RoundsTicker:BackgroundService
 {
     
     private readonly ILogger<RoundsTicker> _logger;
-    private static readonly TimeSpan TickInterval = TimeSpan.FromMilliseconds(50);
-    // The authoritative multiplier is e^(rate * elapsedSeconds), not the number of ticker iterations.
+     // The authoritative multiplier is e^(rate * elapsedSeconds), not the number of ticker iterations.
     private const double GrowthRatePerSecond = 0.12d;
 
     private readonly GameEngineOptions _options;
     private readonly RoundsService  _roundsService;
 
-    private readonly object _lock = new();
+    private static readonly TimeSpan EvaluationInterval =
+        TimeSpan.FromMilliseconds(50);
 
-    
+    private static readonly TimeSpan BroadcastInterval =
+        TimeSpan.FromMilliseconds(100);
+
+    private readonly ConcurrentDictionary<long, DateTimeOffset> _lastBroadcasts = new();
+
+
+
     public RoundsTicker( ILogger<RoundsTicker> _logger,GameEngineOptions _options, RoundsService _roundsService)
     {
         this._logger = _logger;
         this._options = _options;
         this._roundsService = _roundsService;
 
+    }
+
+    private bool ShouldBroadcast(long tableId, DateTimeOffset now)
+    {
+        var lastBroadcast = _lastBroadcasts.GetOrAdd(
+            tableId,
+            DateTimeOffset.MinValue);
+
+        if (now - lastBroadcast < BroadcastInterval)
+            return false;
+
+        _lastBroadcasts[tableId] = now;
+        return true;
     }
 
     private async Task SendCrashEvent(RoundRuntimeSnapshot round, long tableId, CancellationToken ct)
@@ -66,28 +86,48 @@ public sealed class RoundsTicker:BackgroundService
             foreach (var key in _options.Tables)
             {
                 var table = key.Value;
-                if (!table.TryAdvanceRound(now, GrowthRatePerSecond, out var round, out var justCrashed) || round is null)
-                    continue;
-
-                if (justCrashed)
+                try
                 {
-                    await SendCrashEvent(round, table.TableId, stoppingToken);
-                    _logger.LogInformation(
-                        "Round {RoundId} crashed at {Multiplier}",
+                    // Isolate each table so one invalid round cannot terminate the ticker
+                    // and stop crash detection for every table owned by this engine.
+                    if (!table.TryAdvanceRound(now, GrowthRatePerSecond, out var round, out var justCrashed) || round is null)
+                        continue;
+
+                    if (justCrashed)
+                    {
+                        // Crash lifecycle events must bypass normal tick throttling.
+                        await SendCrashEvent(round, table.TableId, stoppingToken);
+                        _lastBroadcasts.TryRemove(table.TableId, out _);
+                        _logger.LogInformation(
+                            "Round {RoundId} crashed at {Multiplier}",
+                            round.RoundId,
+                            round.CurrentMultiplier);
+                        continue;
+                    }
+
+                    if (!ShouldBroadcast(table.TableId, now)) continue;
+
+                    await SendTickEvent(round, table.TableId, stoppingToken);
+                    _logger.LogDebug(
+                        "Round {RoundId} tick {Multiplier} sequence {TickSequence}",
                         round.RoundId,
-                        round.CurrentMultiplier);
-                    continue;
+                        round.CurrentMultiplier,
+                        round.TickSequence);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    _logger.LogError(
+                        exception,
+                        "Failed to evaluate active round for table {TableId}.",
+                        table.TableId);
                 }
 
-                await SendTickEvent(round, table.TableId, stoppingToken);
-                _logger.LogInformation(
-                    "Round {RoundId} tick {Multiplier} sequence {TickSequence}",
-                    round.RoundId,
-                    round.CurrentMultiplier,
-                    round.TickSequence);
-
             }
-            await Task.Delay(TickInterval, stoppingToken);
+            await Task.Delay(EvaluationInterval, stoppingToken);
 
 
         }

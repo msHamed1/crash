@@ -85,16 +85,43 @@ public sealed class TableRuntimeState
             if (_currentRound is null || _currentRound.IsCrashed || now < _currentRound.StartsAt)
                 return false;
 
+            if (!double.IsFinite(growthRatePerSecond) || growthRatePerSecond <= 0)
+                throw new ArgumentOutOfRangeException(
+                    nameof(growthRatePerSecond),
+                    "The multiplier growth rate must be finite and greater than zero.");
+
+            if (_currentRound.CrashPoint < 1.00m)
+                throw new InvalidOperationException(
+                    $"Round {_currentRound.RoundId} has invalid crash point {_currentRound.CrashPoint}.");
+
             var elapsedSeconds = Math.Max(0, (now - _currentRound.StartsAt).TotalSeconds);
-            var calculated = (decimal)Math.Exp(growthRatePerSecond * elapsedSeconds);
-            var multiplier = Math.Floor(calculated * 100m) / 100m;
+            var exponent = growthRatePerSecond * elapsedSeconds;
+
+            // Compare in logarithmic space before calling Exp or converting to decimal.
+            // A stale round may have been running for minutes; e^x can then exceed
+            // decimal.MaxValue and must be treated as having crossed its crash point.
+            var crashExponent = Math.Log((double)_currentRound.CrashPoint);
+            var reachedCrashPoint = !double.IsFinite(exponent) || exponent >= crashExponent;
+
+            decimal multiplier;
+            if (reachedCrashPoint)
+            {
+                multiplier = _currentRound.CrashPoint;
+            }
+            else
+            {
+                // This conversion is safe because the calculated value is lower than the
+                // decimal CrashPoint. Round down so clients never see a value above the server.
+                var calculated = Math.Exp(exponent);
+                multiplier = (decimal)(Math.Floor(calculated * 100d) / 100d);
+            }
 
             // Do not flood RabbitMQ with identical two-decimal snapshots.
             if (multiplier < _currentRound.CrashPoint && multiplier == _currentRound.CurrentMultiplier)
                 return false;
 
             _currentRound.TickSequence++;
-            if (multiplier >= _currentRound.CrashPoint)
+            if (reachedCrashPoint)
             {
                 _currentRound.CurrentMultiplier = _currentRound.CrashPoint;
                 _currentRound.IsCrashed = true;
