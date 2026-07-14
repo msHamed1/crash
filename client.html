@@ -7,197 +7,503 @@
   <script src="https://cdn.jsdelivr.net/npm/@microsoft/signalr@8.0.7/dist/browser/signalr.min.js"></script>
   <style>
     :root {
-      color-scheme: light;
-      font-family: Arial, sans-serif;
-      background: #f5f7fa;
-      color: #17202a;
+      color-scheme: dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #07090f;
+      color: #f7f8fb;
+      --panel: rgba(19, 23, 34, 0.88);
+      --panel-solid: #11151f;
+      --panel-soft: #171c28;
+      --border: rgba(255, 255, 255, 0.08);
+      --muted: #8e98aa;
+      --green: #59e391;
+      --green-dark: #1fbf68;
+      --amber: #ffb84d;
+      --red: #ff5964;
+      --blue: #6e8cff;
     }
+
+    * { box-sizing: border-box; }
 
     body {
       margin: 0;
-      padding: 32px;
+      min-height: 100vh;
+      padding: 24px;
+      background:
+        radial-gradient(circle at 50% -20%, rgba(62, 89, 183, 0.24), transparent 42%),
+        radial-gradient(circle at 95% 20%, rgba(89, 227, 145, 0.08), transparent 28%),
+        #07090f;
     }
 
     main {
-      max-width: 760px;
+      width: min(1180px, 100%);
       margin: 0 auto;
       display: grid;
-      gap: 18px;
+      grid-template-columns: minmax(0, 1fr) 340px;
+      gap: 16px;
     }
 
     section {
-      background: #ffffff;
-      border: 1px solid #d9e0e8;
-      border-radius: 8px;
-      padding: 18px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 20px;
       display: grid;
-      gap: 14px;
+      gap: 16px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.22);
+      backdrop-filter: blur(18px);
     }
 
-    h1,
-    h2 {
+    h1, h2, p { margin: 0; }
+
+    h1, h2 {
       margin: 0;
       line-height: 1.2;
     }
 
+    h2 { font-size: 16px; }
+
+    .topbar {
+      grid-column: 1 / -1;
+      min-height: 72px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 0 4px 4px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-mark {
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      border-radius: 13px;
+      color: #07110b;
+      background: linear-gradient(145deg, #83f2ad, #30cf73);
+      box-shadow: 0 10px 30px rgba(48, 207, 115, 0.24);
+      font-size: 21px;
+      font-weight: 1000;
+      transform: skew(-7deg);
+    }
+
+    .brand-copy h1 {
+      font-size: 20px;
+      letter-spacing: -0.03em;
+    }
+
+    .brand-copy p {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .connection-summary {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .connection-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 36px;
+      padding: 0 13px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: rgba(255,255,255,.035);
+    }
+
+    .connection-pill::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #6f7887;
+    }
+
+    .connection-pill.connected::before {
+      background: var(--green);
+      box-shadow: 0 0 0 5px rgba(89, 227, 145, .1);
+    }
+
+    .connection-card { grid-column: 2; grid-row: 2; }
+
     label {
       display: grid;
       gap: 6px;
-      font-size: 14px;
-      font-weight: 600;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
     }
 
     input {
-      height: 38px;
-      padding: 0 10px;
-      border: 1px solid #b8c2cc;
-      border-radius: 6px;
-      font-size: 15px;
+      width: 100%;
+      height: 46px;
+      padding: 0 13px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      outline: none;
+      background: rgba(5, 8, 14, .65);
+      color: #f7f8fb;
+      font-size: 14px;
+      font-weight: 650;
+      transition: border-color .18s ease, box-shadow .18s ease;
+    }
+
+    input:focus {
+      border-color: rgba(110, 140, 255, .75);
+      box-shadow: 0 0 0 4px rgba(110, 140, 255, .1);
     }
 
     button {
-      min-height: 40px;
+      min-height: 48px;
       border: 0;
-      border-radius: 6px;
-      background: #1769aa;
-      color: white;
-      font-size: 15px;
-      font-weight: 700;
+      border-radius: 13px;
+      background: linear-gradient(135deg, #63e89a, #27c66d);
+      color: #07130c;
+      font-size: 14px;
+      font-weight: 900;
       cursor: pointer;
+      transition: transform .15s ease, filter .15s ease;
+    }
+
+    button:not(:disabled):hover {
+      transform: translateY(-1px);
+      filter: brightness(1.06);
     }
 
     button:disabled {
       cursor: not-allowed;
-      opacity: 0.55;
+      opacity: 0.35;
     }
 
     .grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 12px;
+      gap: 11px;
     }
 
-    #status {
+    .connection-card .grid { grid-template-columns: 1fr; }
+
+    #status { font-weight: 750; }
+
+    .game-stage {
+      grid-column: 1;
+      grid-row: 2 / span 2;
+      min-height: 590px;
+      position: relative;
+      align-content: start;
+      overflow: hidden;
+      padding: 0;
+      background:
+        linear-gradient(180deg, rgba(14, 18, 28, .7), rgba(8, 11, 17, .94)),
+        var(--panel-solid);
+    }
+
+    .game-stage::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      opacity: .22;
+      background-image:
+        linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px);
+      background-size: 44px 44px;
+      mask-image: linear-gradient(to bottom, transparent, #000 22%, #000 74%, transparent);
+    }
+
+    .stage-header {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 20px 22px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .round-reference {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 13px;
       font-weight: 700;
     }
 
-    .metric-grid {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 12px;
-    }
+    .round-reference strong { color: #fff; }
 
-    .metric {
-      border: 1px solid #d9e0e8;
-      border-radius: 6px;
-      padding: 12px;
-      display: grid;
-      gap: 6px;
-      min-width: 0;
-    }
-
-    .metric span:first-child {
-      color: #637083;
-      font-size: 12px;
-      font-weight: 700;
+    .phase-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(110, 140, 255, .12);
+      color: #b9c5ff;
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: .09em;
       text-transform: uppercase;
     }
 
-    .metric span:last-child {
-      font-size: 20px;
-      font-weight: 800;
-      overflow-wrap: anywhere;
+    .phase-badge::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 0 5px rgba(110, 140, 255, .08);
     }
 
-    .round-state {
-      border-left: 4px solid #1769aa;
+    .stage-center {
+      position: relative;
+      z-index: 1;
+      min-height: 390px;
+      display: grid;
+      place-content: center;
+      justify-items: center;
+      text-align: center;
+      padding: 36px 24px;
     }
 
-    .round-state.crashed {
-      border-left-color: #c62828;
+    .hero-kicker {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 900;
+      letter-spacing: .16em;
+      text-transform: uppercase;
     }
 
-    .round-state.running {
-      border-left-color: #12a150;
-      box-shadow: 0 8px 26px rgba(18, 161, 80, 0.12);
-    }
-
-    .round-state.betting {
-      border-left-color: #ef9b0f;
+    .countdown {
+      display: none;
+      margin-top: 12px;
+      font-size: clamp(60px, 10vw, 112px);
+      font-weight: 950;
+      line-height: .95;
+      letter-spacing: -.07em;
+      font-variant-numeric: tabular-nums;
+      text-shadow: 0 12px 44px rgba(110, 140, 255, .2);
     }
 
     #currentMultiplier {
-      font-size: clamp(30px, 7vw, 64px);
+      margin-top: 12px;
+      font-size: clamp(72px, 12vw, 132px);
+      font-weight: 950;
+      line-height: .9;
+      letter-spacing: -.075em;
       font-variant-numeric: tabular-nums;
       transition: color 120ms ease, transform 120ms ease;
+      text-shadow: 0 12px 46px rgba(89, 227, 145, .14);
     }
 
-    .round-state.crashed #currentMultiplier {
-      color: #c62828;
-      transform: scale(1.04);
+    .stage-message {
+      max-width: 460px;
+      margin-top: 22px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
     }
+
+    .round-state.betting .countdown { display: block; color: #fff; }
+    .round-state.betting #currentMultiplier { display: none; }
+    .round-state.waiting #currentMultiplier { display: none; }
+    .round-state.betting .phase-badge { color: var(--amber); background: rgba(255,184,77,.1); }
+    .round-state.running .phase-badge { color: var(--green); background: rgba(89,227,145,.1); }
+    .round-state.crashed .phase-badge { color: var(--red); background: rgba(255,89,100,.1); }
+    .round-state.crashed #currentMultiplier { color: var(--red); transform: scale(1.035); text-shadow: 0 12px 48px rgba(255,89,100,.2); }
+
+    .lifecycle {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1px;
+      margin: 0 22px 22px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--border);
+    }
+
+    .lifecycle-step {
+      min-height: 68px;
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      padding: 12px 14px;
+      background: rgba(13, 17, 25, .95);
+      color: #657083;
+    }
+
+    .step-number {
+      flex: 0 0 auto;
+      width: 26px;
+      height: 26px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      border: 1px solid currentColor;
+      font-size: 11px;
+      font-weight: 900;
+    }
+
+    .step-copy strong, .step-copy span { display: block; }
+    .step-copy strong { color: #c7ceda; font-size: 12px; }
+    .step-copy span { margin-top: 3px; font-size: 10px; }
+    .lifecycle-step.active { color: var(--green); background: rgba(89,227,145,.055); }
+    .lifecycle-step.active .step-copy strong { color: #fff; }
+    .lifecycle-step.complete { color: #73907f; }
+
+    .stage-footer {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      padding: 0 22px 22px;
+    }
+
+    .stage-meta {
+      display: flex;
+      gap: 20px;
+    }
+
+    .meta-item span, .meta-item strong { display: block; }
+    .meta-item span { color: var(--muted); font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .09em; }
+    .meta-item strong { margin-top: 4px; font-size: 13px; }
 
     .stream-health {
       display: flex;
       align-items: center;
       gap: 8px;
-      color: #637083;
-      font-size: 13px;
+      color: var(--muted);
+      font-size: 12px;
     }
 
     .stream-dot {
-      width: 9px;
-      height: 9px;
+      width: 8px;
+      height: 8px;
       border-radius: 50%;
-      background: #9aa5b1;
+      background: #6f7887;
     }
 
-    .stream-dot.live {
-      background: #12a150;
-      box-shadow: 0 0 0 4px rgba(18, 161, 80, 0.12);
+    .stream-dot.live { background: var(--green); box-shadow: 0 0 0 5px rgba(89,227,145,.1); }
+    .stream-dot.stale { background: var(--red); }
+
+    .bet-card {
+      grid-column: 2;
+      grid-row: 3;
+      align-self: start;
     }
 
-    .stream-dot.stale {
-      background: #c62828;
+    .bet-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .bet-status {
+      padding: 5px 9px;
+      border-radius: 8px;
+      background: rgba(255,255,255,.05);
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 900;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .bet-card .grid { grid-template-columns: 1fr 1fr; }
+    .bet-card label:first-child { grid-column: 1 / -1; }
+
+    .amount-wrap { position: relative; }
+    .amount-wrap input { padding-right: 58px; font-size: 18px; }
+    .amount-currency {
+      position: absolute;
+      right: 13px;
+      bottom: 15px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 900;
+    }
+
+    #sendBetButton { width: 100%; }
+
+    .log-section {
+      grid-column: 1 / -1;
     }
 
     pre {
       min-height: 180px;
+      max-height: 360px;
       margin: 0;
-      padding: 12px;
+      padding: 14px;
       overflow: auto;
-      border-radius: 6px;
-      background: #101820;
-      color: #d8f3dc;
+      border: 1px solid var(--border);
+      border-radius: 13px;
+      background: #070a10;
+      color: #b7f7cd;
+      font: 12px/1.55 "SFMono-Regular", Consolas, monospace;
       white-space: pre-wrap;
     }
 
+    @media (max-width: 900px) {
+      main { grid-template-columns: 1fr; }
+      .game-stage, .connection-card, .bet-card, .log-section { grid-column: 1; grid-row: auto; }
+      .connection-card .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .game-stage { min-height: 560px; }
+    }
+
     @media (max-width: 620px) {
-      body {
-        padding: 18px;
-      }
-
-      .grid {
-        grid-template-columns: 1fr;
-      }
-
-      .metric-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
+      body { padding: 14px; }
+      main { gap: 12px; }
+      .topbar { align-items: flex-start; }
+      .connection-summary > span:first-child { display: none; }
+      .connection-card .grid, .bet-card .grid { grid-template-columns: 1fr; }
+      .bet-card label:first-child { grid-column: auto; }
+      .stage-header, .stage-footer { align-items: flex-start; }
+      .stage-footer { flex-direction: column; }
+      .stage-center { min-height: 340px; }
+      .lifecycle { grid-template-columns: 1fr; }
+      .lifecycle-step { min-height: 54px; }
+      section { border-radius: 16px; }
     }
   </style>
 </head>
 <body>
   <main>
-    <h1>Crash SignalR Client</h1>
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">↗</div>
+        <div class="brand-copy">
+          <h1>Crash Arena</h1>
+          <p>Provably fair · Realtime multiplayer</p>
+        </div>
+      </div>
+      <div class="connection-summary">
+        <span id="topbarPlayer">Guest player</span>
+        <span id="connectionPill" class="connection-pill">Disconnected</span>
+      </div>
+    </header>
 
-    <section>
+    <section class="connection-card">
       <h2>Connection</h2>
       <div class="grid">
-        <label>
-          Name
-          <input id="name" value="Test Player" autocomplete="name">
-        </label>
         <label>
           Username
           <input id="username" value="player-1" autocomplete="username">
@@ -215,38 +521,74 @@
       <div>Status: <span id="status">disconnected</span></div>
     </section>
 
-    <section id="roundState" class="round-state">
-      <h2>Live Round</h2>
-      <div class="metric-grid">
-        <div class="metric">
-          <span>Round</span>
-          <span id="roundId">-</span>
+    <section id="roundState" class="game-stage round-state">
+      <div class="stage-header">
+        <div class="round-reference">
+          <span>ROUND</span>
+          <strong id="roundId">—</strong>
         </div>
-        <div class="metric">
-          <span>Multiplier</span>
-          <span id="currentMultiplier">1.00x</span>
+        <div id="phaseBadge" class="phase-badge">Waiting</div>
+      </div>
+
+      <div class="stage-center">
+        <div id="heroKicker" class="hero-kicker">Waiting for game engine</div>
+        <div id="roundCountdown" class="countdown">—</div>
+        <div id="currentMultiplier">1.00x</div>
+        <p id="stageMessage" class="stage-message">Connect to a table to receive the next round and live multiplier stream.</p>
+      </div>
+
+      <div class="lifecycle" aria-label="Round lifecycle">
+        <div id="stepCreated" class="lifecycle-step">
+          <span class="step-number">1</span>
+          <div class="step-copy">
+            <strong>Round created</strong>
+            <span>Entropy committed</span>
+          </div>
         </div>
-        <div class="metric">
-          <span>Table</span>
-          <span id="liveTableId">-</span>
+        <div id="stepBetting" class="lifecycle-step">
+          <span class="step-number">2</span>
+          <div class="step-copy">
+            <strong>Betting open</strong>
+            <span>Place your wager</span>
+          </div>
         </div>
-        <div class="metric">
-          <span>Phase</span>
-          <span id="roundPhase">Waiting</span>
+        <div id="stepFlying" class="lifecycle-step">
+          <span class="step-number">3</span>
+          <div class="step-copy">
+            <strong>Round live</strong>
+            <span>Cash out before crash</span>
+          </div>
         </div>
       </div>
-      <div class="stream-health">
-        <span id="streamDot" class="stream-dot"></span>
-        <span id="streamHealth">Waiting for round data</span>
+
+      <div class="stage-footer">
+        <div class="stage-meta">
+          <div class="meta-item">
+            <span>Table</span>
+            <strong id="liveTableId">—</strong>
+          </div>
+          <div class="meta-item">
+            <span>Phase</span>
+            <strong id="roundPhase">Waiting</strong>
+          </div>
+        </div>
+        <div class="stream-health">
+          <span id="streamDot" class="stream-dot"></span>
+          <span id="streamHealth">Waiting for round data</span>
+        </div>
       </div>
     </section>
 
-    <section>
-      <h2>Bet Message</h2>
+    <section class="bet-card">
+      <div class="bet-card-header">
+        <h2>Bet ticket</h2>
+        <span id="betStatus" class="bet-status">Betting closed</span>
+      </div>
       <div class="grid">
-        <label>
+        <label class="amount-wrap">
           Amount
           <input id="amount" type="number" min="0" step="0.01" value="10">
+          <span class="amount-currency">USD</span>
         </label>
         <label>
           Currency
@@ -260,7 +602,7 @@
       <button id="sendBetButton" disabled>Send Bet</button>
     </section>
 
-    <section>
+    <section class="log-section">
       <h2>Log</h2>
       <pre id="log"></pre>
     </section>
@@ -285,6 +627,18 @@
     const roundPhaseElement = document.getElementById("roundPhase");
     const streamDotElement = document.getElementById("streamDot");
     const streamHealthElement = document.getElementById("streamHealth");
+    const connectionPillElement = document.getElementById("connectionPill");
+    const topbarPlayerElement = document.getElementById("topbarPlayer");
+    const phaseBadgeElement = document.getElementById("phaseBadge");
+    const heroKickerElement = document.getElementById("heroKicker");
+    const roundCountdownElement = document.getElementById("roundCountdown");
+    const stageMessageElement = document.getElementById("stageMessage");
+    const betStatusElement = document.getElementById("betStatus");
+    const lifecycleSteps = {
+      created: document.getElementById("stepCreated"),
+      betting: document.getElementById("stepBetting"),
+      flying: document.getElementById("stepFlying")
+    };
 
     connectButton.addEventListener("click", connect);
     sendBetButton.addEventListener("click", sendBet);
@@ -316,6 +670,7 @@
 
         loginSession = normalizeLoginResponse(await response.json());
         document.getElementById("tableId").value = loginSession.player.tableId ?? "";
+        topbarPlayerElement.textContent = loginSession.player.externalId ?? getValue("username");
         appendLog("login session", loginSession);
 
         connection = new signalR.HubConnectionBuilder()
@@ -476,8 +831,67 @@
       roundPhaseElement.textContent = phaseLabel();
       roundStateElement.classList.toggle("crashed", roundView.phase === "Crashed");
       roundStateElement.classList.toggle("running", roundView.phase === "Running");
-      roundStateElement.classList.toggle("betting", roundView.phase === "Betting");
+      roundStateElement.classList.toggle("betting", roundView.phase === "Betting" || roundView.phase === "Starting");
+      roundStateElement.classList.toggle("waiting", roundView.phase === "Waiting");
+      renderStageContent();
+      renderLifecycle();
       refreshBetAvailability();
+    }
+
+    function renderStageContent() {
+      const seconds = secondsUntilStart();
+
+      if (roundView.phase === "Betting") {
+        phaseBadgeElement.textContent = "Betting open";
+        heroKickerElement.textContent = "Next round starts in";
+        roundCountdownElement.textContent = formatCountdown(seconds);
+        stageMessageElement.textContent = `Round #${roundView.roundId} is created and ready. Place your bet before the countdown ends.`;
+        return;
+      }
+
+      if (roundView.phase === "Starting") {
+        phaseBadgeElement.textContent = "Starting";
+        heroKickerElement.textContent = "Round is starting";
+        roundCountdownElement.textContent = "GO";
+        stageMessageElement.textContent = "Betting is closed. Waiting for the first verified multiplier tick.";
+        return;
+      }
+
+      if (roundView.phase === "Running") {
+        phaseBadgeElement.textContent = "Live";
+        heroKickerElement.textContent = "Live multiplier";
+        stageMessageElement.textContent = "The round is in flight. Cash out before the multiplier reaches its hidden crash point.";
+        return;
+      }
+
+      if (roundView.phase === "Crashed") {
+        phaseBadgeElement.textContent = "Crashed";
+        heroKickerElement.textContent = `Round #${roundView.roundId} crashed`;
+        stageMessageElement.textContent = "Round complete. The next committed round is being prepared.";
+        return;
+      }
+
+      phaseBadgeElement.textContent = "Waiting";
+      heroKickerElement.textContent = "Waiting for game engine";
+      roundCountdownElement.textContent = "—";
+      stageMessageElement.textContent = "Connect to a table to receive the next round and live multiplier stream.";
+    }
+
+    function renderLifecycle() {
+      Object.values(lifecycleSteps).forEach(step => step.classList.remove("active", "complete"));
+
+      if (roundView.phase === "Betting") {
+        lifecycleSteps.created.classList.add("complete");
+        lifecycleSteps.betting.classList.add("active");
+      } else if (roundView.phase === "Starting" || roundView.phase === "Running") {
+        lifecycleSteps.created.classList.add("complete");
+        lifecycleSteps.betting.classList.add("complete");
+        lifecycleSteps.flying.classList.add("active");
+      } else if (roundView.phase === "Crashed") {
+        Object.values(lifecycleSteps).forEach(step => step.classList.add("complete"));
+      }
+
+      betStatusElement.textContent = roundView.phase === "Betting" ? "Betting open" : "Betting closed";
     }
 
     function phaseLabel() {
@@ -486,6 +900,17 @@
       }
       const seconds = Math.max(0, (roundView.startsAt.getTime() - Date.now()) / 1000);
       return seconds > 0 ? `Betting · ${seconds.toFixed(1)}s` : "Starting";
+    }
+
+    function secondsUntilStart() {
+      if (!roundView.startsAt) {
+        return 0;
+      }
+      return Math.max(0, (roundView.startsAt.getTime() - Date.now()) / 1000);
+    }
+
+    function formatCountdown(seconds) {
+      return seconds > 0 ? seconds.toFixed(1) : "0.0";
     }
 
     function animateMultiplier() {
@@ -571,6 +996,9 @@
 
     function setStatus(value) {
       statusElement.textContent = value;
+      const connected = value.startsWith("connected");
+      connectionPillElement.textContent = connected ? "Connected" : value;
+      connectionPillElement.classList.toggle("connected", connected);
       appendLog("status", value);
     }
 
