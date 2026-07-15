@@ -1,0 +1,11 @@
+{
+  "name": "crash-signalr-load-test",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node load-test.js"
+  },
+  "dependencies": {
+    "@microsoft/signalr": "8.0.7"
+  }
+}
