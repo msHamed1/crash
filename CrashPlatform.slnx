@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/Crash.Contracts/Crash.Contracts.csproj" />
     <Project Path="src/Crash.Domain/Crash.Domain.csproj" />
     <Project Path="src/Crash.Persistence/Crash.Persistence.csproj" />
     <Project Path="src/DbWorkers/DbWorkers.csproj" />

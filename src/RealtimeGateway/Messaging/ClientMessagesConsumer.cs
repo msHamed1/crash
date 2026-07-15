@@ -1,13 +1,14 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Crash.Domain.Contracts;
-using Crash.Domain.Contracts.ServerMessages;
+using Crash.Contracts.Messaging.EngineToGateway.Bets;
+using Crash.Contracts.Messaging.EngineToGateway.Rounds;
 using Crash.Domain.Options;
 using Microsoft.AspNetCore.SignalR;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using RealtimeGateway.Hubs;
+using RealtimeGateway.Contracts.WebSockets.Outbound;
 
 namespace RealtimeGateway.Messaging;
 
@@ -125,24 +126,41 @@ public class ClientMessagesConsumer(
         {
             case "NewRoundInfo":
             {
-                var message = JsonSerializer.Deserialize<NewRoundInfo>(json, JsonOptions)
+                var message = JsonSerializer.Deserialize<RoundCreated>(json, JsonOptions)
                               ?? throw new InvalidOperationException("Invalid NewRoundInfo message.");
+
+                var notification = new RoundCreatedNotification(
+                    message.MessageType,
+                    message.MessageId,
+                    message.TableId,
+                    message.RoundId,
+                    message.CurrentMultiplier,
+                    message.StartsAt,
+                    message.IsCrashed);
 
                 await hubContext.Clients
                     .Group(message.TableId.ToString())
-                    .SendAsync(message.MessageType, message, ct);
+                    .SendAsync(message.MessageType, notification, ct);
 
                 break;
             }
 
             case "RoundTick":
             {
-                var message = JsonSerializer.Deserialize<RoundTick>(json, JsonOptions)
+                var message = JsonSerializer.Deserialize<RoundUpdated>(json, JsonOptions)
                               ?? throw new InvalidOperationException("Invalid RoundTick message.");
+
+                var notification = new RoundUpdatedNotification(
+                    message.MessageType,
+                    message.MessageId,
+                    message.TableId,
+                    message.RoundId,
+                    message.CurrentMultiplier,
+                    message.TickSequence);
 
                 await hubContext.Clients
                     .Group(message.TableId.ToString())
-                    .SendAsync(message.MessageType, message, ct);
+                    .SendAsync(message.MessageType, notification, ct);
 
                 break;
             }
@@ -150,34 +168,87 @@ public class ClientMessagesConsumer(
             case "RoundCrashed":
             {
                 var message = JsonSerializer.Deserialize<RoundCrashed>(json, JsonOptions)
-                              ?? throw new InvalidOperationException("Invalid RoundTick message.");
+                              ?? throw new InvalidOperationException("Invalid RoundCrashed message.");
+
+                var notification = new RoundCrashedNotification(
+                    message.MessageType,
+                    message.MessageId,
+                    message.TableId,
+                    message.RoundId,
+                    message.CurrentMultiplier,
+                    message.IsCrashed,
+                    message.TickSequence);
 
                 await hubContext.Clients
                     .Group(message.TableId.ToString())
-                    .SendAsync(message.MessageType, message, ct);
+                    .SendAsync(message.MessageType, notification, ct);
 
+                break;
+            }
+
+            case "PlayerBetAccepted":
+            {
+                var message = JsonSerializer.Deserialize<BetAccepted>(json, JsonOptions)
+                              ?? throw new InvalidOperationException("Invalid PlayerBetAccepted message.");
+
+                var response = new PlaceBetResponse
+                {
+                    MessageType = message.MessageType,
+                    TableId = message.TableId,
+                    MessageId = message.MessageId,
+                    PlayerId = message.PlayerId,
+                    Accepted = true,
+                    UpdatedBalance = message.UpdatedBalance,
+                    Bet = message.Bet
+                };
+
+                // The payload contains a private balance, so it must not be broadcast to the table.
+                await hubContext.Clients
+                    .Group($"player:{message.PlayerId}")
+                    .SendAsync(message.MessageType, response, ct);
+                break;
+            }
+
+            case "PlayerBetRejected":
+            {
+                var message = JsonSerializer.Deserialize<BetRejected>(json, JsonOptions)
+                              ?? throw new InvalidOperationException("Invalid PlayerBetRejected message.");
+
+                var response = new PlaceBetResponse
+                {
+                    MessageType = message.MessageType,
+                    TableId = message.TableId,
+                    MessageId = message.MessageId,
+                    PlayerId = message.PlayerId,
+                    Accepted = false,
+                    UpdatedBalance = message.UpdatedBalance,
+                    Code = message.Code,
+                    Reason = message.Reason
+                };
+
+                await hubContext.Clients
+                    .Group($"player:{message.PlayerId}")
+                    .SendAsync(message.MessageType, response, ct);
                 break;
             }
 
             case "CurrentState":
             {
-                var message = JsonSerializer.Deserialize<CurrentState>(json, JsonOptions)
+                var message = JsonSerializer.Deserialize<RoundStateSnapshot>(json, JsonOptions)
                               ?? throw new InvalidOperationException("Invalid CurrentState message.");
-                
-                await hubContext.Clients.Group(message.TableId.ToString())
-                    .SendAsync(message.MessageType, message, ct);
-                // if (!string.IsNullOrWhiteSpace(message.ConnectionId))
-                // {
-                //     await hubContext.Clients
-                //         .Client(message.ConnectionId)
-                //         .SendAsync(message.MessageType, message, ct);
-                // }
-                // else
-                // {
-                //     await hubContext.Clients
-                //         .Group($"player:{message.PlayerId}")
-                //         .SendAsync(message.MessageType, message, ct);
-                // }
+
+                var notification = new RoundStateNotification(
+                    message.MessageType,
+                    message.MessageId,
+                    message.TableId,
+                    message.RoundId,
+                    message.CurrentMultiplier,
+                    message.StartsAt,
+                    message.IsCrashed);
+
+                await hubContext.Clients
+                    .Group($"player:{message.PlayerId}")
+                    .SendAsync(message.MessageType, notification, ct);
 
                 break;
             }

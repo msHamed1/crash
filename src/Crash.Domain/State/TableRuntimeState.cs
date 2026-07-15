@@ -40,7 +40,9 @@ public sealed class TableRuntimeState
     public Bet? AddNewBet(
         PlayerRuntimeState player,
         decimal amount,
-        long roundId)
+        long roundId,
+        string betId,
+        string currency)
     {
         const decimal minimumBet = 0.10m;
 
@@ -77,24 +79,73 @@ public sealed class TableRuntimeState
                 return null;
             }
 
+            if (player.Balance < amount)
+            {
+                return null;
+            }
+
             var bet = new Bet
             {
                 PlayerId = player.PlayerId,
                 RoundId = round.RoundId,
                 Amount = amount,
-                BetId = Guid.NewGuid().ToString(),
-                Currency = "USD",
+                // The correlation ID is stable across retries and is protected by a unique DB index.
+                BetId = betId,
+                Currency = currency,
                 Status = BetStatus.Placed,
                 CreatedAt = now
             };
 
             // TryAdd is the authoritative duplicate-bet check.
             // It remains safe even if the preliminary ContainsKey check is removed.
-            if (round.TryAddBet(bet))
-            {
-                return bet;
-            }
-            return null ;
+            if (!round.TryAddBet(bet))
+                return null;
+
+            // Reserve the runtime balance only after the duplicate-bet check succeeds.
+            player.Balance -= amount;
+            return bet;
+        }
+    }
+
+    public bool RollbackBetInMemory(Bet bet, PlayerRuntimeState player)
+    {
+        lock (_lock)
+        {
+           // Never let a delayed rollback remove this player's bet from a newer round.
+           if (_currentRound?.RoundId != bet.RoundId)
+               return false;
+
+           var removed = _currentRound.TryRemoveBet(bet);
+           if (removed)
+           {
+               player.Balance += bet.Amount;
+               return true;
+
+           }
+
+           return false;
+
+
+
+        }
+    }
+
+    public Bet? GetPlayerBet(long roundId, long playerId)
+    {
+        lock (_lock)
+        {
+            return _currentRound?.RoundId == roundId
+                ? _currentRound.GetBet(playerId)
+                : null;
+        }
+    }
+
+    public void SetPlayerBalance(PlayerRuntimeState player, decimal balance)
+    {
+        lock (_lock)
+        {
+            // The committed database value is authoritative after placement succeeds.
+            player.Balance = balance;
         }
     }
  
@@ -246,7 +297,6 @@ public sealed class TableRuntimeState
             return true;
         }
     }
-
 
     private static RoundRuntimeSnapshot Snapshot(RoundRuntimeState round) => new(
         round.RoundId,

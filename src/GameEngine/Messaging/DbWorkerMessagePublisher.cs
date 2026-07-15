@@ -1,7 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Crash.Domain.Contracts;
+using Crash.Contracts.Messaging.DbWorkers;
 using Crash.Domain.Options;
 using RabbitMQ.Client;
 

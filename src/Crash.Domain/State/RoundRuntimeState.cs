@@ -47,6 +47,13 @@ public sealed class RoundRuntimeState
         return _betsByPlayer.TryAdd(bet.PlayerId, bet);
     }
 
+    internal bool TryRemoveBet(Bet bet)
+    {
+        return _betsByPlayer.TryGetValue(bet.PlayerId, out var currentBet)
+               && currentBet.BetId == bet.BetId
+               && _betsByPlayer.Remove(bet.PlayerId);
+    }
+
     public Bet? GetBet(long playerId)
     {
         return _betsByPlayer.GetValueOrDefault(playerId);

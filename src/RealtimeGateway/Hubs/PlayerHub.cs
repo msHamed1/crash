@@ -1,8 +1,8 @@
-using Crash.Domain.Contracts;
-using Crash.Domain.Contracts.BetMessages;
-using Crash.Domain.Contracts.PlayerMessages;
+using Crash.Contracts.Messaging.GatewayToEngine.Bets;
+using Crash.Contracts.Messaging.GatewayToEngine.Players;
 using Microsoft.AspNetCore.SignalR;
 using RabbitMQ.Client;
+using RealtimeGateway.Contracts.WebSockets.Inbound;
 using RealtimeGateway.Jwt;
 using RealtimeGateway.Messaging;
 
@@ -30,17 +30,19 @@ public sealed class PlayerHub(
         
         // Add Player to the Group (Table Group)
         await Groups.AddToGroupAsync(Context.ConnectionId, playerContext.TableId);
+        // Private balance and bet responses are delivered only to this player's connections.
+        await Groups.AddToGroupAsync(Context.ConnectionId, $"player:{playerContext.PlayerId}");
         
         var now = DateTime.UtcNow;
         var correlationId =  Guid.NewGuid().ToString();
-        var envelope = new PlayerJoinedEvent
+        var envelope = new PlayerJoined
         {
             CorrelationId = correlationId,
             CreatedAtUtc = now,
             TableId = GetTableGroup(playerContext.TableId),
             ProcessedAtGatewayUtc = now,
             ProcessedAtClientUtc = now,
-            Data = new PlayerJoinedData
+            Data = new PlayerJoinedPayload
             {
                
                 PlayerId = playerContext.PlayerId,
@@ -69,6 +71,9 @@ public sealed class PlayerHub(
             await Groups.RemoveFromGroupAsync(
                 Context.ConnectionId,
                 playerContext.TableId);
+            await Groups.RemoveFromGroupAsync(
+                Context.ConnectionId,
+                $"player:{playerContext.PlayerId}");
 
             _logger.LogInformation(
                 "Player disconnected. PlayerId: {PlayerId}, TableId: {TableId}, ConnectionId: {ConnectionId}",
@@ -108,7 +113,8 @@ public sealed class PlayerHub(
         return null;
     }
 
-    public async Task Bet(PlaceBetReqData request)
+    [HubMethodName("Bet")]
+    public async Task PlaceBet(PlaceBetRequest request)
     {
         var playerContext = GetPlayerContext();
         if (request.Amount <= 0)
@@ -136,14 +142,14 @@ public sealed class PlayerHub(
         var correlationId = string.IsNullOrWhiteSpace(request.CorrelationId)
             ? Guid.NewGuid().ToString()
             : request.CorrelationId;
-        var envelope = new PlaceBetReqEvent
+        var envelope = new PlaceBetRequested
         {
             CorrelationId = correlationId,
             CreatedAtUtc = now,
             TableId = GetTableGroup(playerContext.TableId),
             ProcessedAtGatewayUtc = now,
             ProcessedAtClientUtc = now,
-            Data = new PlaceBetReqData
+            Data = new PlaceBetRequestPayload
             {
                 RoundId = request.RoundId,
                 PlayerId = playerContext.PlayerId,
@@ -158,7 +164,7 @@ public sealed class PlayerHub(
         {
             TableId = playerContext.TableId,
             Timestamp =  new AmqpTimestamp( DateTimeOffset.UtcNow.ToUnixTimeSeconds()),
-            MessageId = request.CorrelationId,
+            MessageId = correlationId,
             Type =  envelope.MessageType,
         }, Context.ConnectionAborted);
 

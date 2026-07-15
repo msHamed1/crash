@@ -1,7 +1,8 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Crash.Domain.Contracts.ServerMessages;
+using Crash.Contracts.Messaging.EngineToGateway;
+using Crash.Contracts.Messaging.EngineToGateway.Rounds;
 using Crash.Domain.Options;
 using RabbitMQ.Client;
 
@@ -11,7 +12,7 @@ namespace GameEngine.Messaging;
 
 public interface IClientMessagePublisher
 {
-    Task PublishAsync(ToClient message, CancellationToken ct);
+    Task PublishAsync(GatewayMessage message, CancellationToken ct);
 }
 public class ClientMessagePublisher:IClientMessagePublisher,IDisposable
 {
@@ -109,12 +110,12 @@ public class ClientMessagePublisher:IClientMessagePublisher,IDisposable
             routingKey: options.RoutingKey);
     }
 
-    public async Task PublishAsync(ToClient message, CancellationToken ct)
+    public async Task PublishAsync(GatewayMessage message, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         var json = JsonSerializer.Serialize(message, message.GetType(), JsonOptions);
         var body = Encoding.UTF8.GetBytes(json);
-        var isTransientTick = message is RoundTick;
+        var isTransientTick = message is RoundUpdated;
 
         if (isTransientTick)
         {
@@ -174,7 +175,7 @@ public class ClientMessagePublisher:IClientMessagePublisher,IDisposable
 
     }
 
-    private void PublishTransient(byte[] body, ToClient message)
+    private void PublishTransient(byte[] body, GatewayMessage message)
     {
         var rabbitChannel = GetTransientChannel();
         var properties = rabbitChannel.CreateBasicProperties();
@@ -192,7 +193,7 @@ public class ClientMessagePublisher:IClientMessagePublisher,IDisposable
             body: body);
     }
 
-    private void PublishReliable(IModel rabbitChannel, byte[] body, ToClient message)
+    private void PublishReliable(IModel rabbitChannel, byte[] body, GatewayMessage message)
     {
         var properties = rabbitChannel.CreateBasicProperties();
         properties.Persistent = true;

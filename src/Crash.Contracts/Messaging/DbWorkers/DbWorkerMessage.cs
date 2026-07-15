@@ -1,12 +1,12 @@
 using Crash.Domain.Entities;
 
-namespace Crash.Domain.Contracts;
+namespace Crash.Contracts.Messaging.DbWorkers;
 
 public enum DbWorkerMessageType
 {
     Create,
     Update,
-    Delete,
+    Delete
 }
 
 public sealed record DbWorkerMessagePayload(
@@ -14,13 +14,10 @@ public sealed record DbWorkerMessagePayload(
     Round Round,
     Bet Bet,
     string TableId,
-    string PlayerId
-);
+    string PlayerId);
 
 public sealed record DbWorkerMessageEnvelope(
     Guid MessageId,
     DbWorkerMessageType Type,
     DbWorkerMessagePayload Payload,
-    DateTimeOffset ReceivedAt
-     
-    );
+    DateTimeOffset ReceivedAt);

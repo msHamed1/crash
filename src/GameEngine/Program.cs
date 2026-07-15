@@ -38,6 +38,7 @@ builder.Services.AddSingleton(dbWorkerBrokerOptions);
 
 builder.Services.AddSingleton(playerBrokerOptions);
 builder.Services.AddSingleton(gameEngineOptions);
+builder.Services.AddSingleton<BettingService>();
 builder.Services.AddSingleton<RoundsService>();
 builder.Services.AddSingleton<IDbWorkerMessagePublisher, DbWorkerMessagePublisher>();
 builder.Services.AddSingleton<IClientMessagePublisher,ClientMessagePublisher>();

@@ -1,12 +1,13 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Crash.Domain.Contracts.BetMessages;
-using Crash.Domain.Contracts.Commands;
-using Crash.Domain.Contracts.Consumer;
-using Crash.Domain.Contracts.PlayerMessages;
+using Crash.Contracts.Messaging.Common;
+using Crash.Contracts.Messaging.GatewayToEngine.Bets;
+using Crash.Contracts.Messaging.GatewayToEngine.Players;
 using Crash.Domain.Options;
 using GameEngine.Services;
+using GameEngine.Application.Commands.Bets;
+using GameEngine.Application.Commands.Players;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 
@@ -271,19 +272,29 @@ public sealed class PlayerMessageConsumer   : BackgroundService
         {
             case "place-bet":
             {
-                var message = JsonSerializer.Deserialize<PlaceBetReqEvent>(json, JsonOptions)
+                var message = JsonSerializer.Deserialize<PlaceBetRequested>(json, JsonOptions)
                               ?? throw new InvalidOperationException("Invalid place-bet message.");
 
               //  await _gameEngine.PlaceBetAsync(message, ct);
               
               _logger.LogInformation("Player {PlayerId} place bet",message.Data.PlayerId);
+              var command = new PlaceBetCommand
+              {
+                  TableId = message.TableId.ToString(),
+                  RoundId  = message.Data.RoundId,
+                  PlayerId = message.Data.PlayerId,
+                  Amount = message.Data.Amount,
+                  Currency = message.Data.Currency,
+                  CorrelationId = message.CorrelationId
 
+              };
+              await _roundsService.EnqueueAsync(command, ct);
                 break;
             }
 
             case "cash-out":
             {
-                var message = JsonSerializer.Deserialize<CashoutBetEvent>(json, JsonOptions)
+                var message = JsonSerializer.Deserialize<CashOutRequested>(json, JsonOptions)
                               ?? throw new InvalidOperationException("Invalid cash-out message.");
 
               //  await _gameEngine.CashOutAsync(message, ct);
@@ -294,24 +305,24 @@ public sealed class PlayerMessageConsumer   : BackgroundService
 
             case "player-joined":
             {
-                var message = JsonSerializer.Deserialize<PlayerJoinedEvent>(json, JsonOptions)
+                var message = JsonSerializer.Deserialize<PlayerJoined>(json, JsonOptions)
                               ?? throw new InvalidOperationException("Invalid player-joined message.");
 
              //   await _gameEngine.PlayerJoinedAsync(message, ct);
              _logger.LogInformation("Player {PlayerId} Joined the table {TableId}",message.Data.PlayerId,message.TableId);
              Console.WriteLine("Player {0} Joined the table {1}",message.Data.PlayerId,message.TableId);
-             var envelop = new PlayerJoinedCommand 
+             var command = new AddPlayerToTableCommand
              {
                  TableId = message.TableId.ToString(),
                  PlayerId = message.Data.PlayerId,
              };
-             await _roundsService.EnqueueAsync(envelop, ct);
+             await _roundsService.EnqueueAsync(command, ct);
                 break;
             }
 
             case "player-left":
             {
-                var message = JsonSerializer.Deserialize<PlayerLeftEvent>(json, JsonOptions)
+                var message = JsonSerializer.Deserialize<PlayerLeft>(json, JsonOptions)
                               ?? throw new InvalidOperationException("Invalid player-left message.");
 
                 _logger.LogInformation("Player {PlayerId} Left the table {TableId}",message.Data.PlayerId,message.TableId);

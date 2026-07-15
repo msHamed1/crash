@@ -1,8 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Crash.Domain.Contracts;
-using Crash.Domain.Contracts.Common;
+using Crash.Contracts.Messaging.Common;
 using Crash.Domain.Options;
 using RabbitMQ.Client;
  
@@ -15,10 +14,10 @@ public interface IPlayerMessagePublisher
 
 public sealed record PublisherOptions
 {
-    public string MessageId {get; init;}
-    public string Type {get; init;}
+    public required string MessageId {get; init;}
+    public required string Type {get; init;}
     public AmqpTimestamp Timestamp {get; init;}
-    public string TableId {get; init;}
+    public required string TableId {get; init;}
 }
 public sealed class PlayerMessagePublisher : IPlayerMessagePublisher, IDisposable
 {
