@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Crash.Domain.Entities;
+using Crash.Domain.State.Settlement;
 
 namespace Crash.Domain.State;
 
@@ -42,7 +43,10 @@ public sealed class TableRuntimeState
         decimal amount,
         long roundId,
         string betId,
-        string currency)
+        string currency,
+        decimal? autoCashoutMultiplier,
+        bool? autoCashoutEnabled
+        )
     {
         const decimal minimumBet = 0.10m;
 
@@ -88,7 +92,9 @@ public sealed class TableRuntimeState
             {
                 PlayerId = player.PlayerId,
                 RoundId = round.RoundId,
-                Amount = amount,
+                StakeAmount = amount,
+                AutoCashoutEnabled =autoCashoutEnabled,
+                AutoCashoutMultiplier = autoCashoutMultiplier,
                 // The correlation ID is stable across retries and is protected by a unique DB index.
                 BetId = betId,
                 Currency = currency,
@@ -106,6 +112,40 @@ public sealed class TableRuntimeState
             return bet;
         }
     }
+    
+    public void ApplyCommittedCashout(
+        string betId,
+        decimal cashoutMultiplier,
+        decimal payoutAmount,
+        decimal updatedBalance,
+        DateTimeOffset settledAt)
+    {
+        lock (_lock)
+        {
+            var bet = _currentRound?
+                .GetBetsSnapshot()
+                .FirstOrDefault(bet => bet.BetId == betId);
+
+            if (bet is null)
+                return;
+
+            bet.Status = BetStatus.CashedOut;
+            bet.CashedOutAtMultiplier = cashoutMultiplier;
+            bet.CashedOutAt = settledAt;
+            bet.SettledAt = settledAt;
+            bet.PayoutAmount = payoutAmount;
+            bet.Pl = payoutAmount - bet.StakeAmount;
+
+            var player = _players.FirstOrDefault(
+                player => player.PlayerId == bet.PlayerId);
+
+            if (player is not null)
+            {
+                // Copy the authoritative committed database balance.
+                player.Balance = updatedBalance;
+            }
+        }
+    }
 
     public bool RollbackBetInMemory(Bet bet, PlayerRuntimeState player)
     {
@@ -118,7 +158,7 @@ public sealed class TableRuntimeState
            var removed = _currentRound.TryRemoveBet(bet);
            if (removed)
            {
-               player.Balance += bet.Amount;
+               player.Balance += bet.StakeAmount;
                return true;
 
            }
@@ -181,6 +221,64 @@ public sealed class TableRuntimeState
         lock (_lock)
         {
             return _currentRound is null ? null : Snapshot(_currentRound);
+        }
+    }
+    
+    public RoundRuntimeState? GetCurrentRound()
+    {
+        lock (_lock)
+        {
+            return _currentRound is null ? null :_currentRound;
+        }
+    }
+    ///This returns immutable information. It should not settle or change balances.
+    public IReadOnlyList<BetSettlementCandidate>
+        GetAutoCashoutCandidates(
+            long roundId,
+            decimal currentMultiplier)
+    {
+        lock (_lock)
+        {
+            if (_currentRound?.RoundId != roundId)
+                return [];
+
+            return _currentRound
+                .GetBetsSnapshot()
+                .Where(bet =>
+                    bet.Status == BetStatus.Accepted &&
+                    bet.AutoCashoutEnabled == true &&
+                    bet.AutoCashoutMultiplier.HasValue &&
+                    currentMultiplier >=
+                    bet.AutoCashoutMultiplier.Value)
+                .Select(bet => new BetSettlementCandidate(
+                    BetId: bet.BetId,
+                    PlayerId: bet.PlayerId,
+                    RoundId: bet.RoundId,
+                    StakeAmount: bet.StakeAmount,
+                    CashoutMultiplier:
+                    bet.AutoCashoutMultiplier!.Value))
+                .ToArray();
+        }
+    }
+    
+    ///Losing bets do not increase player balance.
+    public void ApplyCommittedLoss(
+        string betId,
+        DateTimeOffset settledAt)
+    {
+        lock (_lock)
+        {
+            var bet = _currentRound?
+                .GetBetsSnapshot()
+                .FirstOrDefault(bet => bet.BetId == betId);
+
+            if (bet is null)
+                return;
+
+            bet.Status = BetStatus.Lost;
+            bet.PayoutAmount = 0;
+            bet.Pl = -bet.StakeAmount;
+            bet.SettledAt = settledAt;
         }
     }
 

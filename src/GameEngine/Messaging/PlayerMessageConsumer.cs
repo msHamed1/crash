@@ -285,7 +285,10 @@ public sealed class PlayerMessageConsumer   : BackgroundService
                   PlayerId = message.Data.PlayerId,
                   Amount = message.Data.Amount,
                   Currency = message.Data.Currency,
-                  CorrelationId = message.CorrelationId
+                  CorrelationId = message.CorrelationId,
+                  AutoCashoutMultiplier=message.Data.AutoCashoutMultiplier,
+                  AutoCashoutEnabled =  message.Data.AutoCashoutEnabled,
+                  
 
               };
               await _roundsService.EnqueueAsync(command, ct);
@@ -299,6 +302,15 @@ public sealed class PlayerMessageConsumer   : BackgroundService
 
               //  await _gameEngine.CashOutAsync(message, ct);
               _logger.LogInformation("Player {PlayerId} cash out",message.Data.PlayerId);
+
+              await _roundsService.EnqueueAsync(new CashOutBetCommand
+              {
+                  TableId = message.TableId.ToString(),
+                  RoundId = message.Data.RoundId,
+                  PlayerId = message.Data.PlayerId,
+                  BetId = message.Data.BetId,
+                  CorrelationId = message.CorrelationId
+              }, ct);
 
                 break;
             }

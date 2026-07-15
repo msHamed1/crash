@@ -147,17 +147,26 @@ namespace Crash.Persistence.Migrations
                 name: "Bets",
                 columns: table => new
                 {
-                    Id = table.Column<int>(type: "int", nullable: false)
+                    Id = table.Column<long>(type: "bigint", nullable: false)
                         .Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
+                    BetId = table.Column<string>(type: "varchar(255)", nullable: false)
+                        .Annotation("MySql:CharSet", "utf8mb4"),
                     PlayerId = table.Column<long>(type: "bigint", nullable: false),
-                    Amount = table.Column<int>(type: "int", nullable: false),
+                    RoundId = table.Column<long>(type: "bigint", nullable: false),
+                    StakeAmount = table.Column<decimal>(type: "decimal(65,30)", nullable: false),
                     Currency = table.Column<string>(type: "longtext", nullable: false)
                         .Annotation("MySql:CharSet", "utf8mb4"),
-                    CreatedAt = table.Column<DateTime>(type: "datetime(6)", nullable: false),
-                    SettledAt = table.Column<DateTime>(type: "datetime(6)", nullable: true),
+                    AutoCashoutMultiplier = table.Column<decimal>(type: "decimal(65,30)", nullable: true),
+                    AutoCashoutEnabled = table.Column<bool>(type: "tinyint(1)", nullable: true),
+                    CashedOutAtMultiplier = table.Column<decimal>(type: "decimal(65,30)", nullable: true),
+                    PayoutAmount = table.Column<decimal>(type: "decimal(65,30)", nullable: false),
+                    Pl = table.Column<decimal>(type: "decimal(65,30)", nullable: false),
                     Status = table.Column<string>(type: "longtext", nullable: false)
                         .Annotation("MySql:CharSet", "utf8mb4"),
-                    RoundId = table.Column<long>(type: "bigint", nullable: false)
+                    CreatedAt = table.Column<DateTimeOffset>(type: "datetime(6)", nullable: false),
+                    AcceptedAt = table.Column<DateTimeOffset>(type: "datetime(6)", nullable: true),
+                    CashedOutAt = table.Column<DateTimeOffset>(type: "datetime(6)", nullable: true),
+                    SettledAt = table.Column<DateTimeOffset>(type: "datetime(6)", nullable: true)
                 },
                 constraints: table =>
                 {
@@ -176,6 +185,12 @@ namespace Crash.Persistence.Migrations
                         onDelete: ReferentialAction.Cascade);
                 })
                 .Annotation("MySql:CharSet", "utf8mb4");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Bets_BetId",
+                table: "Bets",
+                column: "BetId",
+                unique: true);
 
             migrationBuilder.CreateIndex(
                 name: "IX_Bets_PlayerId",

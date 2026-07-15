@@ -12,7 +12,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Crash.Persistence.Migrations
 {
     [DbContext(typeof(DataContext))]
-    [Migration("20260709142859_Initial")]
+    [Migration("20260715113612_Initial")]
     partial class Initial
     {
         /// <inheritdoc />
@@ -61,21 +61,43 @@ namespace Crash.Persistence.Migrations
 
             modelBuilder.Entity("Crash.Domain.Entities.Bet", b =>
                 {
-                    b.Property<int>("Id")
+                    b.Property<long>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
+                        .HasColumnType("bigint");
 
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<long>("Id"));
 
-                    b.Property<int>("Amount")
-                        .HasColumnType("int");
+                    b.Property<DateTimeOffset?>("AcceptedAt")
+                        .HasColumnType("datetime(6)");
 
-                    b.Property<DateTime>("CreatedAt")
+                    b.Property<bool?>("AutoCashoutEnabled")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<decimal?>("AutoCashoutMultiplier")
+                        .HasColumnType("decimal(65,30)");
+
+                    b.Property<string>("BetId")
+                        .IsRequired()
+                        .HasColumnType("varchar(255)");
+
+                    b.Property<DateTimeOffset?>("CashedOutAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<decimal?>("CashedOutAtMultiplier")
+                        .HasColumnType("decimal(65,30)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("datetime(6)");
 
                     b.Property<string>("Currency")
                         .IsRequired()
                         .HasColumnType("longtext");
+
+                    b.Property<decimal>("PayoutAmount")
+                        .HasColumnType("decimal(65,30)");
+
+                    b.Property<decimal>("Pl")
+                        .HasColumnType("decimal(65,30)");
 
                     b.Property<long>("PlayerId")
                         .HasColumnType("bigint");
@@ -83,14 +105,20 @@ namespace Crash.Persistence.Migrations
                     b.Property<long>("RoundId")
                         .HasColumnType("bigint");
 
-                    b.Property<DateTime?>("SettledAt")
+                    b.Property<DateTimeOffset?>("SettledAt")
                         .HasColumnType("datetime(6)");
+
+                    b.Property<decimal>("StakeAmount")
+                        .HasColumnType("decimal(65,30)");
 
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasColumnType("longtext");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("BetId")
+                        .IsUnique();
 
                     b.HasIndex("PlayerId");
 

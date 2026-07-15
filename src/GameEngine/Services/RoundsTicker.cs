@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Crash.Domain.Options;
 using Crash.Domain.State;
+using GameEngine.Application.Commands.Bets;
 using GameEngine.Application.Commands.Rounds;
 
 namespace GameEngine.Services;
@@ -77,14 +78,17 @@ public sealed class RoundsTicker:BackgroundService
     }
 
   
+
+  
     
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
         {
-            var now = DateTimeOffset.UtcNow;
             foreach (var key in _options.Tables)
             {
+                var now = DateTimeOffset.UtcNow;
+
                 var table = key.Value;
                 try
                 {
@@ -95,8 +99,20 @@ public sealed class RoundsTicker:BackgroundService
 
                     if (justCrashed)
                     {
+                        // TODO Process all bets in Memory 
+                        await _roundsService.EnqueueAsync(
+                            new ProcessAutoCashoutsCommand
+                            {
+                                TableId = table.TableId.ToString(),
+                                RoundId = round.RoundId.ToString(),
+                                CurrentMultiplier =
+                                    round.CurrentMultiplier
+                            },
+                            stoppingToken);
                         // Crash lifecycle events must bypass normal tick throttling.
                         await SendCrashEvent(round, table.TableId, stoppingToken);
+                       
+                        
                         _lastBroadcasts.TryRemove(table.TableId, out _);
                         _logger.LogInformation(
                             "Round {RoundId} crashed at {Multiplier}",
@@ -105,8 +121,19 @@ public sealed class RoundsTicker:BackgroundService
                         continue;
                     }
 
-                    if (!ShouldBroadcast(table.TableId, now)) continue;
+                    //TODO Check current Bets if auto Cashout is enabled on the current multiplier .
+                    await _roundsService.EnqueueAsync(
+                        new ProcessAutoCashoutsCommand
+                        {
+                            TableId = table.TableId.ToString(),
+                            RoundId = round.RoundId.ToString(),
+                            CurrentMultiplier =
+                                round.CurrentMultiplier
+                        },
+                        stoppingToken);
 
+                    if (!ShouldBroadcast(table.TableId, now)) continue;
+                    
                     await SendTickEvent(round, table.TableId, stoppingToken);
                     _logger.LogDebug(
                         "Round {RoundId} tick {Multiplier} sequence {TickSequence}",

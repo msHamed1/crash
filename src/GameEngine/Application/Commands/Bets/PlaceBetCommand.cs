@@ -7,4 +7,8 @@ public sealed record PlaceBetCommand : GameCommand
     public required string Currency { get; init; }
     public required string CorrelationId { get; init; }
     public override string MessageType => "Bet";
+    
+    public decimal? AutoCashoutMultiplier { get; init; }
+    public bool? AutoCashoutEnabled { get; init; }
+
 }

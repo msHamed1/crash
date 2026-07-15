@@ -232,6 +232,31 @@ public class ClientMessagesConsumer(
                 break;
             }
 
+            case "BetCashedOut":
+            {
+                var message = JsonSerializer.Deserialize<BetCashedOut>(json, JsonOptions)
+                              ?? throw new InvalidOperationException("Invalid BetCashedOut message.");
+
+                var notification = new BetCashedOutNotification
+                {
+                    MessageType = message.MessageType,
+                    MessageId = message.MessageId,
+                    BetId = message.BetId,
+                    RoundId = message.RoundId,
+                    CashoutMultiplier = message.CashoutMultiplier,
+                    PayoutAmount = message.PayoutAmount,
+                    NetResultAmount = message.NetResultAmount,
+                    UpdatedBalance = message.UpdatedBalance,
+                    CashedOutAt = message.CashedOutAt
+                };
+
+                // Cashout details and balance are private to the affected player.
+                await hubContext.Clients
+                    .Group($"player:{message.PlayerId}")
+                    .SendAsync(message.MessageType, notification, ct);
+                break;
+            }
+
             case "CurrentState":
             {
                 var message = JsonSerializer.Deserialize<RoundStateSnapshot>(json, JsonOptions)

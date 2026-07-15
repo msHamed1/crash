@@ -65,6 +65,71 @@ public sealed class RoundRuntimeState
         // collection or enumerate it while it is being changed.
         return _betsByPlayer.Values.ToArray();
     }
+
+    public List<Bet> SettleCurrentRoundBetsIfNeeded()
+    {
+        List<Bet> bets = new List<Bet>();
+        foreach (var bet in _betsByPlayer.Select(keyValuePair => keyValuePair.Value).Where(bet => bet.Status == BetStatus.Accepted))
+        {
+            if (bet.AutoCashoutEnabled ==true)
+            {
+                // Auto cashout enabled
+                var updatedBet=    AutoSettleBetIfNeeded(bet);
+                if (updatedBet != null)
+                {
+                    bets.Add(updatedBet);
+                    continue;
+                }
+                
+               
+              
+            }
+
+            if (!IsCrashed) continue;
+            var lostBet=   AutoSettleBetIfRoundCrashed(bet);
+            bets.Add(lostBet);
+        }
+
+        return bets;
+    }
+    private Bet AutoSettleBetIfRoundCrashed(Bet bet)
+    {
+         
+        bet.SettledAt = DateTimeOffset.Now;
+        var winAmount =0;
+        bet.Pl =bet.StakeAmount -winAmount ;
+        bet.Status =  BetStatus.Lost;
+        bet.PayoutAmount = winAmount;
+
+        return bet;
+
+    }
+    private Bet? AutoSettleBetIfNeeded(Bet bet)
+    {
+        
+      var  reachedTarget =
+            bet.AutoCashoutMultiplier < CrashPoint &&
+            CurrentMultiplier >= bet.AutoCashoutMultiplier;
+        // Multiplier may jump from 1.49 -> 1.51, so settle when we've reached or exceeded the target.
+        if (bet.AutoCashoutMultiplier is null ||reachedTarget)
+            return null;
+        var now = DateTimeOffset.UtcNow;
+
+        bet.SettledAt =now ;
+
+        var multiplier = bet.AutoCashoutMultiplier.Value;
+
+        var winAmount = bet.StakeAmount * multiplier;
+
+        bet.Pl = winAmount - bet.StakeAmount;
+        bet.PayoutAmount = winAmount;
+        bet.CashedOutAtMultiplier = multiplier;
+        bet.CashedOutAt = now ;
+
+        bet.Status = BetStatus.CashedOut;
+
+        return bet;
+    }
 }
 
 /// <summary>

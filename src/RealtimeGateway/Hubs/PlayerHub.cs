@@ -155,7 +155,7 @@ public sealed class PlayerHub(
                 PlayerId = playerContext.PlayerId,
                 Amount = request.Amount,
                 Currency = request.Currency,
-                AutoCashoutAt = request.AutoCashoutAt,
+                AutoCashoutMultiplier = request.AutoCashoutAt,
                 AutoCashoutEnabled = request.AutoCashoutEnabled
             }
         };
@@ -168,6 +168,44 @@ public sealed class PlayerHub(
             Type =  envelope.MessageType,
         }, Context.ConnectionAborted);
 
+    }
+
+    [HubMethodName("CashOut")]
+    public async Task CashOut(CashOutRequest request)
+    {
+        var playerContext = GetPlayerContext();
+        if (string.IsNullOrWhiteSpace(request.RoundId) || string.IsNullOrWhiteSpace(request.BetId))
+            throw new HubException("RoundId and BetId are required.");
+
+        var now = DateTime.UtcNow;
+        var correlationId = string.IsNullOrWhiteSpace(request.CorrelationId)
+            ? Guid.NewGuid().ToString()
+            : request.CorrelationId;
+
+        var envelope = new CashOutRequested
+        {
+            CorrelationId = correlationId,
+            CreatedAtUtc = now,
+            TableId = GetTableGroup(playerContext.TableId),
+            ProcessedAtGatewayUtc = now,
+            ProcessedAtClientUtc = now,
+            Data = new CashOutRequestPayload
+            {
+                RoundId = request.RoundId,
+                PlayerId = playerContext.PlayerId,
+                BetId = request.BetId,
+                // The engine uses its authoritative runtime multiplier, never a client value.
+                Multiplier = 0
+            }
+        };
+
+        await publisher.PublishAsync(envelope, new PublisherOptions
+        {
+            TableId = playerContext.TableId,
+            Timestamp = new AmqpTimestamp(DateTimeOffset.UtcNow.ToUnixTimeSeconds()),
+            MessageId = correlationId,
+            Type = envelope.MessageType
+        }, Context.ConnectionAborted);
     }
     
     

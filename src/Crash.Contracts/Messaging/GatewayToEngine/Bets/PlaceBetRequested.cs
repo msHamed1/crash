@@ -16,6 +16,6 @@ public sealed record PlaceBetRequestPayload
     public required string PlayerId { get; init; }
     public decimal Amount { get; init; }
     public required string Currency { get; init; }
-    public decimal? AutoCashoutAt { get; init; }
+    public decimal? AutoCashoutMultiplier { get; init; }
     public bool? AutoCashoutEnabled { get; init; }
 }

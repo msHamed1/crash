@@ -118,10 +118,20 @@ public sealed class RoundsService : BackgroundService
                         table,
                         ct);
                     break;
+                case CashOutBetCommand cashOutCommand:
+                    await _bettingService.CashOutAsync(cashOutCommand, table, ct);
+                    break;
                 case CrashRoundCommand roundCrashCommand:
                     await ProcessRoundCrashedCommand(
                         roundCrashCommand,
                         table,
+                        ct);
+                    break;
+                case ProcessAutoCashoutsCommand autoCashoutsCommand:
+                    await _bettingService.ProcessAutoCashoutsAsync(
+                        table,
+                        long.Parse(autoCashoutsCommand.RoundId),
+                        autoCashoutsCommand.CurrentMultiplier,
                         ct);
                     break;
                 case CreateRoundCommand newRoundCommand:
@@ -156,6 +166,11 @@ public sealed class RoundsService : BackgroundService
             throw new InvalidOperationException(
                 $"Could not mark round {roundId} as crashed because its fencing token or state is stale.");
         }
+        // Database now confirms that this engine owns the crashed round.
+        await _bettingService.SettleCrashedRoundAsync(
+            table,
+            roundId,
+            ct);
 
         await SendRoundCrashedCommand(roundCrashCommand, tableId, ct);
         // A new round may only be created after the previous crash is fenced, persisted,
