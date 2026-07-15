@@ -157,7 +157,7 @@ public class TableRepository:ITableRepository
         // 3. If no table found, create a new table
         // 4. Add player to table
         // 5. Return table;
-        const int maxPlayers = 2;
+        const int maxPlayers = 200;
         var now = DateTimeOffset.UtcNow;
 
         for (var attempt = 0; attempt < 5; attempt++)

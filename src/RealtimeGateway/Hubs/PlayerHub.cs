@@ -21,11 +21,11 @@ public sealed class PlayerHub(
         var playerContext = jwtConnectionValidator.Validate(Context);
         Context.Items[ConnectionContextKey] = playerContext;
         
-        _logger.LogInformation(
-            "Player connected. PlayerId: {PlayerId}, TableId: {TableId}, ConnectionId: {ConnectionId}",
-            playerContext.PlayerId,
-            playerContext.TableId,
-            Context.ConnectionId);      
+        // _logger.LogInformation(
+        //     "Player connected. PlayerId: {PlayerId}, TableId: {TableId}, ConnectionId: {ConnectionId}",
+        //     playerContext.PlayerId,
+        //     playerContext.TableId,
+        //     Context.ConnectionId);      
         
         
         // Add Player to the Group (Table Group)
