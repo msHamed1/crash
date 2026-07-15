@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
-using Crash.Domain.Contracts.Commands;
 using Crash.Domain.Options;
 using Crash.Domain.State;
+using GameEngine.Application.Commands.Rounds;
 
 namespace GameEngine.Services;
 
@@ -49,7 +49,7 @@ public sealed class RoundsTicker:BackgroundService
 
     private async Task SendCrashEvent(RoundRuntimeSnapshot round, long tableId, CancellationToken ct)
     {
-        var envelop = new RoundCrashCommand
+        var command = new CrashRoundCommand
         {
             CurrentMultiplier = round.CurrentMultiplier,
             RoundId = round.RoundId.ToString(),
@@ -57,13 +57,13 @@ public sealed class RoundsTicker:BackgroundService
             TickSequence = round.TickSequence
 
        };
-       await _roundsService.EnqueueAsync(envelop, ct);
+       await _roundsService.EnqueueAsync(command, ct);
     }
     
     
     private async Task SendTickEvent(RoundRuntimeSnapshot round, long tableId, CancellationToken ct)
     {
-        var envelop = new RoundTickCommand 
+        var command = new AdvanceRoundCommand
         {
             CurrentMultiplier = round.CurrentMultiplier,
             RoundId = round.RoundId.ToString(),
@@ -71,7 +71,7 @@ public sealed class RoundsTicker:BackgroundService
             TickSequence = round.TickSequence
 
         };
-        await _roundsService.EnqueueAsync(envelop, ct);
+        await _roundsService.EnqueueAsync(command, ct);
        
         
     }
