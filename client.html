@@ -442,7 +442,21 @@
       font-weight: 900;
     }
 
-    #sendBetButton { width: 100%; }
+    #sendBetButton, #cashOutButton { width: 100%; }
+    #cashOutButton { background: linear-gradient(135deg, #ffca66, #ff9f2e); }
+
+    .bet-result {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(255,255,255,.025);
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .bet-result strong { color: #fff; }
 
     .log-section {
       grid-column: 1 / -1;
@@ -600,6 +614,11 @@
         </label>
       </div>
       <button id="sendBetButton" disabled>Send Bet</button>
+      <button id="cashOutButton" disabled>Cash Out</button>
+      <div class="bet-result">
+        <span>Balance<br><strong id="playerBalance">—</strong></span>
+        <span>Active bet<br><strong id="activeBet">None</strong></span>
+      </div>
     </section>
 
     <section class="log-section">
@@ -614,10 +633,14 @@
     let roundView = createEmptyRoundView();
     let displayedMultiplier = 1;
     let multiplierAnimationFrame = null;
+    let activeBet = null;
     const receivedMessageIds = new Set();
 
     const connectButton = document.getElementById("connectButton");
     const sendBetButton = document.getElementById("sendBetButton");
+    const cashOutButton = document.getElementById("cashOutButton");
+    const playerBalanceElement = document.getElementById("playerBalance");
+    const activeBetElement = document.getElementById("activeBet");
     const statusElement = document.getElementById("status");
     const logElement = document.getElementById("log");
     const roundStateElement = document.getElementById("roundState");
@@ -642,6 +665,7 @@
 
     connectButton.addEventListener("click", connect);
     sendBetButton.addEventListener("click", sendBet);
+    cashOutButton.addEventListener("click", sendCashOut);
 
     async function connect() {
       const gatewayApi = getValue("gatewayApi").replace(/\/$/, "");
@@ -725,8 +749,46 @@
         
       };
 
-      await connection.invoke("Bet", message);
-      appendLog("sent bet", message);
+      activeBet = {
+        betId: null,
+        roundId: String(roundView.roundId),
+        correlationId: message.correlationId,
+        status: "Pending",
+        stakeAmount: message.amount
+      };
+      renderBetState();
+      try {
+        await connection.invoke("Bet", message);
+        appendLog("sent bet", message);
+      } catch (error) {
+        activeBet = null;
+        renderBetState();
+        throw error;
+      }
+    }
+
+    async function sendCashOut() {
+      if (!connection || !activeBet?.betId || activeBet.status !== "Accepted") {
+        return;
+      }
+
+      const request = {
+        correlationId: `cashout-${Date.now()}`,
+        roundId: String(activeBet.roundId),
+        betId: activeBet.betId
+      };
+
+      cashOutButton.disabled = true;
+      activeBet.status = "Cashout pending";
+      renderBetState();
+      try {
+        await connection.invoke("CashOut", request);
+        appendLog("sent cashout", request);
+      } catch (error) {
+        activeBet.status = "Accepted";
+        renderBetState();
+        throw error;
+      }
     }
 
     function registerServerMessageHandlers(hubConnection) {
@@ -740,10 +802,52 @@
 
       hubConnection.on("RoundCrashed", message => {
         acceptRoundMessage(message, "RoundCrashed");
+        const crashedRoundId = String(readField(message, "roundId", "RoundId"));
+        if (activeBet?.roundId === crashedRoundId
+            && !activeBet.status.startsWith("Cashed out")) {
+          activeBet.status = "Lost";
+          renderBetState();
+        }
       });
 
       hubConnection.on("CurrentState", message => {
         acceptRoundMessage(message, "CurrentState");
+      });
+
+      hubConnection.on("PlayerBetAccepted", message => {
+        const bet = readField(message, "bet", "Bet");
+        activeBet = {
+          betId: String(readField(bet, "betId", "BetId")),
+          roundId: String(readField(bet, "roundId", "RoundId")),
+          correlationId: readField(message, "messageId", "MessageId"),
+          status: "Accepted",
+          stakeAmount: Number(readField(bet, "stakeAmount", "StakeAmount") ?? 0)
+        };
+        updateBalance(readField(message, "updatedBalance", "UpdatedBalance"));
+        renderBetState();
+        appendLog("bet accepted", message);
+      });
+
+      hubConnection.on("PlayerBetRejected", message => {
+        const messageId = readField(message, "messageId", "MessageId");
+        if (!activeBet || !messageId || activeBet.correlationId === messageId) {
+          activeBet = null;
+        }
+        betStatusElement.textContent = `Rejected · ${readField(message, "code", "Code") ?? "BET_REJECTED"}`;
+        updateBalance(readField(message, "updatedBalance", "UpdatedBalance"));
+        renderBetState();
+        appendLog("bet rejected", message);
+      });
+
+      hubConnection.on("BetCashedOut", message => {
+        const betId = String(readField(message, "betId", "BetId"));
+        updateBalance(readField(message, "updatedBalance", "UpdatedBalance"));
+        if (activeBet?.betId === betId) {
+          activeBet.status = `Cashed out @ ${Number(readField(message, "cashoutMultiplier", "CashoutMultiplier")).toFixed(2)}x`;
+        }
+        renderBetState();
+        cashOutButton.disabled = true;
+        appendLog("bet cashed out", message);
       });
     }
 
@@ -758,7 +862,6 @@
           receivedMessageIds.delete(receivedMessageIds.values().next().value);
         }
       }
-
       const roundId = readField(message, "roundId", "RoundId");
       const tableId = readField(message, "tableId", "TableId");
       const multiplier = readField(message, "currentMultiplier", "CurrentMultiplier");
@@ -785,6 +888,9 @@
       }
 
       if (isNewRound) {
+        if (activeBet && activeBet.roundId !== normalizedRoundId) {
+          activeBet = null;
+        }
         roundView = createEmptyRoundView();
         roundView.roundId = normalizedRoundId;
         displayedMultiplier = 1;
@@ -891,7 +997,9 @@
         Object.values(lifecycleSteps).forEach(step => step.classList.add("complete"));
       }
 
-      betStatusElement.textContent = roundView.phase === "Betting" ? "Betting open" : "Betting closed";
+      betStatusElement.textContent = activeBet?.roundId === String(roundView.roundId)
+        ? activeBet.status
+        : roundView.phase === "Betting" ? "Betting open" : "Betting closed";
     }
 
     function phaseLabel() {
@@ -934,7 +1042,29 @@
 
     function refreshBetAvailability() {
       sendBetButton.disabled = connection?.state !== signalR.HubConnectionState.Connected
-        || roundView.phase !== "Betting";
+        || roundView.phase !== "Betting"
+        || (activeBet && activeBet.roundId === String(roundView.roundId));
+      cashOutButton.disabled = connection?.state !== signalR.HubConnectionState.Connected
+        || roundView.phase !== "Running"
+        || !activeBet?.betId
+        || activeBet.status !== "Accepted";
+    }
+
+    function updateBalance(value) {
+      const balance = Number(value);
+      if (Number.isFinite(balance)) {
+        playerBalanceElement.textContent = `${balance.toFixed(2)} USD`;
+      }
+    }
+
+    function renderBetState() {
+      activeBetElement.textContent = activeBet
+        ? `${activeBet.status} · ${activeBet.stakeAmount ?? 0} USD`
+        : "None";
+      if (activeBet?.status) {
+        betStatusElement.textContent = activeBet.status;
+      }
+      refreshBetAvailability();
     }
 
     function setStreamHealth(state, text) {
@@ -946,7 +1076,6 @@
       const parsed = Number(value);
       return Number.isFinite(parsed) && parsed >= 1 ? parsed : fallback;
     }
-
     function compareRoundIds(left, right) {
       try {
         const leftId = BigInt(left);
