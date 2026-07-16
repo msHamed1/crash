@@ -1,7 +1,7 @@
 using Crash.Domain.Options;
 using Crash.Persistence;
- using DbWorkers.Services;
- using Microsoft.EntityFrameworkCore;
+using DbWorkers.Consumers;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -24,6 +24,7 @@ GetSection(DbBrokerOptions.SectionName)
     .Get<DbBrokerOptions>() ?? new DbBrokerOptions();
 builder.Services.AddSingleton(dbWorkerBrokerOptions);
 
+builder.Services.AddScoped<IDbWorkerMessageProcessor, DbWorkerMessageProcessor>();
 builder.Services.AddHostedService<DbMessageConsumer>();
 
 var app = builder.Build();

@@ -96,6 +96,9 @@ namespace Crash.Persistence.Migrations
                     b.Property<decimal>("Pl")
                         .HasColumnType("decimal(65,30)");
 
+                    b.Property<long>("PersistenceSequence")
+                        .HasColumnType("bigint");
+
                     b.Property<long>("PlayerId")
                         .HasColumnType("bigint");
 
@@ -122,6 +125,36 @@ namespace Crash.Persistence.Migrations
                     b.HasIndex("RoundId");
 
                     b.ToTable("Bets");
+                });
+
+            modelBuilder.Entity("Crash.Persistence.ProcessedDbMessage", b =>
+                {
+                    b.Property<Guid>("MessageId")
+                        .HasColumnType("char(36)")
+                        .UseCollation("ascii_general_ci");
+
+                    b.Property<string>("MessageType")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<DateTimeOffset>("ProcessedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<long>("RoundId")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("Sequence")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("TableId")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("MessageId");
+
+                    b.HasIndex("TableId", "RoundId", "Sequence");
+
+                    b.ToTable("ProcessedDbMessages");
                 });
 
             modelBuilder.Entity("Crash.Domain.Entities.Owner", b =>

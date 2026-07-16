@@ -17,6 +17,7 @@ public class DataContext: DbContext
     
     public DbSet<Owner> Owners  => Set<Owner>();   
     public DbSet<AppLog> AppLogs  => Set<AppLog>();
+    public DbSet<ProcessedDbMessage> ProcessedDbMessages => Set<ProcessedDbMessage>();
     
     
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -37,6 +38,22 @@ public class DataContext: DbContext
         modelBuilder.Entity<Bet>()
             .HasIndex(b => b.BetId)
             .IsUnique();
+
+        modelBuilder.Entity<ProcessedDbMessage>(entity =>
+        {
+            entity.HasKey(message => message.MessageId);
+            entity.Property(message => message.MessageId)
+                .ValueGeneratedNever();
+            entity.Property(message => message.MessageType)
+                .HasMaxLength(100)
+                .IsRequired();
+            entity.HasIndex(message => new
+            {
+                message.TableId,
+                message.RoundId,
+                message.Sequence
+            });
+        });
         
         
         modelBuilder.Entity<Player>();

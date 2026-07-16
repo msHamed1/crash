@@ -9,6 +9,7 @@ public sealed class DbBrokerOptions
     public string UserName { get; init; } = "guest";
     public string Password { get; init; } = "guest";
     public string ExchangeName { get; init; } = "db.worker-messages";
+    public string ExchangeResultName { get; init; } = "db.worker-results";
 }
 
 public sealed class PlayerBrokerOptions

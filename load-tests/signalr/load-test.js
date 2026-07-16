@@ -4,9 +4,9 @@ import { performance } from "node:perf_hooks";
 
 const config = {
   gatewayUrl: process.env.GATEWAY_URL ?? "http://localhost:5003",
-  players: positiveInteger("PLAYERS", 100),
+  players: positiveInteger("PLAYERS", 200),
   connectConcurrency: positiveInteger("CONNECT_CONCURRENCY", 10),
-  betAmount: positiveNumber("BET_AMOUNT", 1),
+  betAmount: positiveNumber("BET_AMOUNT", 5),
   currency: process.env.CURRENCY ?? "USD",
   autoCashoutAt: positiveNumber("AUTO_CASHOUT_AT", 2),
   responseTimeoutMs: positiveInteger("BET_RESPONSE_TIMEOUT_MS", 10_000),
