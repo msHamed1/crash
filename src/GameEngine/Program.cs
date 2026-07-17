@@ -43,7 +43,7 @@ builder.Services.AddSingleton<RoundsService>();
 builder.Services.AddSingleton<IDbWorkerMessagePublisher, DbWorkerMessagePublisher>();
 builder.Services.AddSingleton<IClientMessagePublisher,ClientMessagePublisher>();
 builder.Services.AddHostedService<PlayerMessageConsumer>();
-builder.Services.AddHostedService<Core>();
+builder.Services.AddHostedService<TableOwnershipService>();
 builder.Services.AddSingleton<RoundsTicker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<RoundsTicker>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<RoundsService>());

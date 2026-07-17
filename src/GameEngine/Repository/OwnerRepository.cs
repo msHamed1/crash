@@ -10,7 +10,7 @@ public interface IOwnerRepository
     Task<List<Owner>> GetAllOwners(CancellationToken ct);
     Task<Owner?> GetByName(string ownerName, CancellationToken ct);
     
-    Task<Owner?> CreateOwner(Owner owner, CancellationToken ct);
+    Task<Owner> CreateOwner(Owner owner, CancellationToken ct);
 }
 public class OwnerRepository:IOwnerRepository
 {
@@ -38,7 +38,7 @@ public class OwnerRepository:IOwnerRepository
             .FirstOrDefaultAsync(o => o.Name == ownerName, ct);
     }
 
-    public async  Task<Owner?> CreateOwner(Owner owner, CancellationToken ct)
+    public async  Task<Owner> CreateOwner(Owner owner, CancellationToken ct)
     {
        await _db.Owners.AddAsync(owner,ct);
         await _db.SaveChangesAsync(ct); 
