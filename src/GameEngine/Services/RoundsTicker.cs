@@ -129,7 +129,7 @@ public sealed class RoundsTicker:BackgroundService
                                     RoundId: bet.RoundId,
                                     TableId: table.TableId,
                                     FencingToken:table.FencingToken,
-                                    Sequence: 1
+                                    Sequence: 2
                                     )
                                  
                                 ), stoppingToken);

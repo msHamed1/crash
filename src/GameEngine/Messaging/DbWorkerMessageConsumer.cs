@@ -160,9 +160,14 @@ private async Task ConsumerAsync(CancellationToken ct)
                 TableId=message.TableId.ToString(),
                 RoundId = message.RoundId.ToString(),
                 Status = message.Status,
+                ResultType = message.Type,
+                SettlementStatus = message.SettlementStatus,
+                UpdatedBalance = message.UpdatedBalance,
+                PayoutAmount = message.PayoutAmount,
+                ProfitLoss = message.ProfitLoss,
+                CashoutMultiplier = message.CashoutMultiplier,
+                SettledAt = message.SettledAt,
                 ErrorCode =  message.ErrorCode,
-                IsCreated = message is { Type: DbWorkerResultMessageType.Bet, Status: DbWorkerResultStatus.Committed },
-                
             };
             
             await roundsService.EnqueueAsync(command, ct);

@@ -74,7 +74,11 @@ public sealed class RoundsService(
                     tick.RoundId,
                     tick.TableId);
             }
-            else
+            if (command is ProcessAutoCashoutsCommand _)
+            {
+             
+            }
+            else   
             {
                 logger.LogInformation(
                     "Processing {MessageType} for table {TableId}",

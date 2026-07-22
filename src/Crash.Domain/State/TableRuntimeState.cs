@@ -87,8 +87,7 @@ public sealed class TableRuntimeState
             {
                 return null;
             }
-           // Reserve the runtime balance only after the duplicate-bet check succeeds.
-            player.Balance -= amount;
+
             var bet = new Bet
             {
                 PlayerId = player.PlayerId,
@@ -102,8 +101,9 @@ public sealed class TableRuntimeState
                 IsPersisted =  false,
                 Status = BetStatus.Placed,
                 CreatedAt = now,
-                Player =
+                Player = new Player
                 {
+                    Type = "FUN",
                     BalanceInUSD = player.Balance,
                     ExternalId = player.ExternalId,
                     Id =  player.PlayerId,
@@ -117,12 +117,15 @@ public sealed class TableRuntimeState
             if (!round.TryAddBet(bet))
                 return null;
 
+            // Reserve the runtime balance only after the duplicate-bet check succeeds.
+            player.Balance -= amount;
+
             
             return bet;
         }
     }
     
-    public void ApplyCommittedCashout(
+    public bool ApplyCommittedCashout(
         string betId,
         decimal cashoutMultiplier,
         decimal payoutAmount,
@@ -135,8 +138,8 @@ public sealed class TableRuntimeState
                 .GetBetsSnapshot()
                 .FirstOrDefault(bet => bet.BetId == betId);
 
-            if (bet is null)
-                return;
+            if (bet is null || bet.Status != BetStatus.Accepted)
+                return false;
 
             bet.Status = BetStatus.CashedOut;
             bet.CashedOutAtMultiplier = cashoutMultiplier;
@@ -153,6 +156,8 @@ public sealed class TableRuntimeState
                 // Copy the authoritative committed database balance.
                 player.Balance = updatedBalance;
             }
+
+            return true;
         }
     }
 
@@ -271,7 +276,7 @@ public sealed class TableRuntimeState
     }
     
     ///Losing bets do not increase player balance.
-    public void ApplyCommittedLoss(
+    public bool ApplyCommittedLoss(
         string betId,
         DateTimeOffset settledAt)
     {
@@ -281,13 +286,14 @@ public sealed class TableRuntimeState
                 .GetBetsSnapshot()
                 .FirstOrDefault(bet => bet.BetId == betId);
 
-            if (bet is null)
-                return;
+            if (bet is null || bet.Status != BetStatus.Accepted)
+                return false;
 
             bet.Status = BetStatus.Lost;
             bet.PayoutAmount = 0;
             bet.Pl = -bet.StakeAmount;
             bet.SettledAt = settledAt;
+            return true;
         }
     }
 
@@ -344,6 +350,7 @@ public sealed class TableRuntimeState
                 return null;
             }
             bet.IsPersisted = true;
+            bet.Status = BetStatus.Accepted;
             
             return bet;
             

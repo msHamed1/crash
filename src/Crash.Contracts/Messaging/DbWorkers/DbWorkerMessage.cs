@@ -35,6 +35,7 @@ public enum BetSettlementStatus
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "$payloadType")]
 [JsonDerivedType(typeof(BetAcceptedForPersistence), "bet-accepted")]
 [JsonDerivedType(typeof(BetSettledForPersistence), "bet-settled")]
+[JsonDerivedType(typeof(BetCanceledForPersistence), "bet-cancelled")]
 public abstract record DbWorkerMessagePayload(
     long TableId,
     long RoundId,

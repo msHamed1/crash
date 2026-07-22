@@ -108,27 +108,12 @@ public class DbMessageConsumer(
                     message,
                     stoppingToken);
 
-                switch (result)
-                {
-                    case DbMessageProcessResult.Committed:
-                        logger.LogInformation(
-                            "Committed DB event {MessageId}.",
-                            message.MessageId);
-                        break;
+                PublishResult(channel, message, result);
 
-                    case DbMessageProcessResult.AlreadyProcessed:
-                        logger.LogInformation(
-                            "DB event {MessageId} was already processed.",
-                            message.MessageId);
-                        break;
-
-                    default:
-                        throw new ArgumentOutOfRangeException(
-                            nameof(result),
-                            result,
-                            "Unsupported DB processing result.");
-
-                }
+                logger.LogInformation(
+                    "DB event {MessageId} completed. AlreadyProcessed={AlreadyProcessed}.",
+                    message.MessageId,
+                    result.AlreadyProcessed);
 
                 SafeAck(channel, ea.DeliveryTag);
 
@@ -211,6 +196,12 @@ private void ConfigureTopology(IModel channel)
         durable: true,
 
         // RabbitMQ will not automatically delete the exchange when unused.
+        autoDelete: false);
+
+    channel.ExchangeDeclare(
+        exchange: options.ExchangeResultName,
+        type: ExchangeType.Direct,
+        durable: true,
         autoDelete: false);
 
     // Declares a separate exchange for failed/dead-lettered messages.
@@ -319,6 +310,11 @@ private static void ValidateMessage(DbWorkerMessageEnvelope message)
             Payload: BetSettledForPersistence
         } => true,
 
+        {
+            Type: DbWorkerMessageType.BetCancelled,
+            Payload: BetCanceledForPersistence
+        } => true,
+
         _ => false
     };
 
@@ -327,6 +323,75 @@ private static void ValidateMessage(DbWorkerMessageEnvelope message)
         throw new InvalidDbMessageException(
             $"Message type {message.Type} does not match payload " +
             $"{message.Payload.GetType().Name}.");
+    }
+}
+
+private void PublishResult(
+    IModel channel,
+    DbWorkerMessageEnvelope message,
+    DbMessageProcessResult processResult)
+{
+    var (playerId, type, settlementStatus, payout, profitLoss, multiplier, settledAt) =
+        message.Payload switch
+        {
+            BetAcceptedForPersistence accepted =>
+                (accepted.PlayerId, DbWorkerResultMessageType.BetAccepted,
+                    (BetSettlementStatus?)null, 0m, 0m, (decimal?)null, (DateTimeOffset?)null),
+            BetSettledForPersistence settled =>
+                (settled.PlayerId, DbWorkerResultMessageType.BetSettled,
+                    (BetSettlementStatus?)settled.Status, settled.PayoutAmount,
+                    settled.ProfitLoss, settled.CashoutMultiplier,
+                    (DateTimeOffset?)settled.SettledAt),
+            BetCanceledForPersistence cancelled =>
+                (cancelled.PlayerId, DbWorkerResultMessageType.BetCancelled,
+                    (BetSettlementStatus?)null, 0m, 0m, (decimal?)null,
+                    (DateTimeOffset?)message.CreatedAt),
+            _ => throw new InvalidDbMessageException("Unsupported DB result payload.")
+        };
+
+    var betId = message.Payload switch
+    {
+        BetAcceptedForPersistence accepted => accepted.BetId,
+        BetSettledForPersistence settled => settled.BetId,
+        BetCanceledForPersistence cancelled => cancelled.BetId,
+        _ => throw new InvalidDbMessageException("Unsupported DB result payload.")
+    };
+
+    var result = new BetPersistenceResult(
+        MessageId: Guid.NewGuid(),
+        CausationMessageId: message.MessageId,
+        BetId: betId,
+        PlayerId: playerId,
+        TableId: message.Payload.TableId,
+        RoundId: message.Payload.RoundId,
+        Sequence: message.Payload.Sequence,
+        Type: type,
+        Status: processResult.AlreadyProcessed
+            ? DbWorkerResultStatus.AlreadyProcessed
+            : DbWorkerResultStatus.Committed,
+        SettlementStatus: settlementStatus,
+        UpdatedBalance: processResult.UpdatedBalance,
+        PayoutAmount: payout,
+        ProfitLoss: profitLoss,
+        CashoutMultiplier: multiplier,
+        SettledAt: settledAt,
+        ErrorCode: null,
+        ErrorMessage: null,
+        CompletedAt: DateTimeOffset.UtcNow);
+
+    var body = JsonSerializer.SerializeToUtf8Bytes(result, JsonOptions);
+    var properties = channel.CreateBasicProperties();
+    properties.Persistent = true;
+    properties.ContentType = "application/json";
+    properties.MessageId = result.MessageId.ToString();
+
+    lock (_channelLock)
+    {
+        channel.BasicPublish(
+            exchange: options.ExchangeResultName,
+            routingKey: $"table.{message.Payload.TableId}",
+            basicProperties: properties,
+            body: body);
     }
 }
 

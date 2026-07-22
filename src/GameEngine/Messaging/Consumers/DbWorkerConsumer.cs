@@ -80,7 +80,11 @@ private void ConfigureTopology(IModel channel)
         // RabbitMQ will not automatically delete the exchange when unused.
         autoDelete: false);
 
-    foreach (var (tableId, table) in gameEngineOptions.Tables)
+}
+
+private void ConfigureTableResultQueue(IModel channel, long tableId)
+{
+    lock (_channelLock)
     {
         // Declares the main queue used by the database worker.
         channel.QueueDeclare(
@@ -102,15 +106,12 @@ private void ConfigureTopology(IModel channel)
             queue: $"table.{tableId}.db-results",
 
             // The normal application exchange.
-            exchange: options.ExchangeName,
+            exchange: options.ExchangeResultName,
 
             // Because this is a Direct exchange, only messages published with
             // the exact routing key "DbWorkers" will enter this queue.
             routingKey:$"table.{tableId}");
     }
-    
-
-   
 }
 
 private static BetPersistenceResult Deserialize(
@@ -166,14 +167,19 @@ private async Task ConsumerAsync(CancellationToken ct)
                 PlayerId= message.PlayerId,
 
                 Status = message.Status,
+                ResultType = message.Type,
+                SettlementStatus = message.SettlementStatus,
+                UpdatedBalance = message.UpdatedBalance,
+                PayoutAmount = message.PayoutAmount,
+                ProfitLoss = message.ProfitLoss,
+                CashoutMultiplier = message.CashoutMultiplier,
+                SettledAt = message.SettledAt,
                 ErrorCode =  message.ErrorCode,
-                IsCreated = message is { Type: DbWorkerResultMessageType.Bet, Status: DbWorkerResultStatus.Committed },
-                
             };
             
              
             
-            var valid= bettingService.ProcessBetPersistenceCompleted(command );
+            var valid= await bettingService.ProcessBetPersistenceCompleted(command, ct);
 
             if (valid)
             {
@@ -194,6 +200,27 @@ private async Task ConsumerAsync(CancellationToken ct)
             
         }
     };
+
+    var consumedTables = new HashSet<long>();
+    while (!ct.IsCancellationRequested)
+    {
+        foreach (var tableId in gameEngineOptions.Tables.Keys)
+        {
+            if (!consumedTables.Add(tableId))
+                continue;
+
+            ConfigureTableResultQueue(channel, tableId);
+            lock (_channelLock)
+            {
+                channel.BasicConsume(
+                    queue: $"table.{tableId}.db-results",
+                    autoAck: false,
+                    consumer: consumer);
+            }
+        }
+
+        await Task.Delay(TimeSpan.FromSeconds(1), ct);
+    }
 }
 
     

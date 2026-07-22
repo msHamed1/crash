@@ -4,11 +4,9 @@ namespace DbWorkers.Application;
 /// Successful outcomes from processing a durable DB-worker message.
 /// Both outcomes are safe for the RabbitMQ consumer to acknowledge.
 /// </summary>
-public enum DbMessageProcessResult
-{
-    Committed,
-    AlreadyProcessed
-}
+public sealed record DbMessageProcessResult(
+    bool AlreadyProcessed,
+    decimal UpdatedBalance);
 
 /// <summary>
 /// Indicates that the message payload is malformed or does not match its

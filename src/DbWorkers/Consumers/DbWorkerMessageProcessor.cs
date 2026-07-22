@@ -32,7 +32,8 @@ public sealed class DbWorkerMessageProcessor(
         ArgumentNullException.ThrowIfNull(message);
 
         if (await WasAlreadyProcessed(message.MessageId, cancellationToken))
-            return DbMessageProcessResult.AlreadyProcessed;
+            return new DbMessageProcessResult(true,
+                await GetPlayerBalance(message.Payload, cancellationToken));
 
         await using var transaction =
             await db.Database.BeginTransactionAsync(cancellationToken);
@@ -44,9 +45,11 @@ public sealed class DbWorkerMessageProcessor(
             if (await WasAlreadyProcessed(message.MessageId, cancellationToken))
             {
                 await transaction.RollbackAsync(cancellationToken);
-                return DbMessageProcessResult.AlreadyProcessed;
+                return new DbMessageProcessResult(true,
+                    await GetPlayerBalance(message.Payload, cancellationToken));
             }
  
+            decimal updatedBalance;
             switch (message)
             {
                 case
@@ -54,7 +57,7 @@ public sealed class DbWorkerMessageProcessor(
                     Type: DbWorkerMessageType.BetAccepted,
                     Payload: BetAcceptedForPersistence accepted
                 }:
-                    await PersistAcceptedBet(accepted, cancellationToken);
+                    updatedBalance = await PersistAcceptedBet(accepted, cancellationToken);
                     break;
 
                 case
@@ -62,7 +65,15 @@ public sealed class DbWorkerMessageProcessor(
                     Type: DbWorkerMessageType.BetSettled,
                     Payload: BetSettledForPersistence settled
                 }:
-                    await PersistSettledBet(settled, cancellationToken);
+                    updatedBalance = await PersistSettledBet(settled, cancellationToken);
+                    break;
+
+                case
+                {
+                    Type: DbWorkerMessageType.BetCancelled,
+                    Payload: BetCanceledForPersistence cancelled
+                }:
+                    updatedBalance = await PersistCancelledBet(cancelled, cancellationToken);
                     break;
 
                 default:
@@ -89,7 +100,7 @@ public sealed class DbWorkerMessageProcessor(
                 message.MessageId,
                 message.Type);
 
-            return DbMessageProcessResult.Committed;
+            return new DbMessageProcessResult(false, updatedBalance);
         }
         catch (DbUpdateException)
         {
@@ -100,7 +111,8 @@ public sealed class DbWorkerMessageProcessor(
             // insert. In that case the unique inbox key converts the race into
             // an idempotent success.
             if (await WasAlreadyProcessed(message.MessageId, cancellationToken))
-                return DbMessageProcessResult.AlreadyProcessed;
+                return new DbMessageProcessResult(true,
+                    await GetPlayerBalance(message.Payload, cancellationToken));
 
             throw;
         }
@@ -120,16 +132,16 @@ public sealed class DbWorkerMessageProcessor(
             .AnyAsync(message => message.MessageId == messageId, cancellationToken);
     }
 
-    private async Task PersistAcceptedBet(
+    private async Task<decimal> PersistAcceptedBet(
         BetAcceptedForPersistence message,
         CancellationToken cancellationToken)
     {
         ValidateAcceptedMessage(message);
-        if (message.PlayerId == 1)
-        {
-            await Task.Delay(TimeSpan.FromSeconds(8), cancellationToken);
-            
-        }
+        // if (message.PlayerId == 1)
+        // {
+        //     await Task.Delay(TimeSpan.FromSeconds(8), cancellationToken);
+        //     
+        // }
         var existingBet = await db.Bets
             .FromSqlInterpolated(
                 $"SELECT * FROM Bets WHERE BetId = {message.BetId} FOR UPDATE")
@@ -138,7 +150,7 @@ public sealed class DbWorkerMessageProcessor(
         if (existingBet is not null)
         {
             EnsureSameAcceptedBet(existingBet, message);
-            return;
+            return await GetPlayerBalance(message, cancellationToken);
         }
 
         var round = await db.Rounds
@@ -194,9 +206,10 @@ public sealed class DbWorkerMessageProcessor(
             AcceptedAt = message.AcceptedAt,
             CreatedAt = message.AcceptedAt
         });
+        return player.BalanceInUSD;
     }
 
-    private async Task PersistSettledBet(
+    private async Task<decimal> PersistSettledBet(
         BetSettledForPersistence message,
         CancellationToken cancellationToken)
     {
@@ -240,7 +253,7 @@ public sealed class DbWorkerMessageProcessor(
         if (IsTerminal(bet.Status))
         {
             EnsureSameSettlement(bet, message, targetStatus);
-            return;
+            return await GetPlayerBalance(message, cancellationToken);
         }
 
         if (bet.Status != BetStatus.Accepted)
@@ -278,6 +291,77 @@ public sealed class DbWorkerMessageProcessor(
             : null;
         bet.SettledAt = message.SettledAt;
         bet.PersistenceSequence = message.Sequence;
+        return player.BalanceInUSD;
+    }
+
+    private async Task<decimal> PersistCancelledBet(
+        BetCanceledForPersistence message,
+        CancellationToken cancellationToken)
+    {
+        var bet = await db.Bets
+            .FromSqlInterpolated(
+                $"SELECT * FROM Bets WHERE BetId = {message.BetId} FOR UPDATE")
+            .SingleOrDefaultAsync(cancellationToken);
+
+        if (bet is null)
+            throw new InvalidOperationException(
+                $"Accepted bet {message.BetId} has not been persisted yet.");
+
+        if (bet.PlayerId != message.PlayerId || bet.RoundId != message.RoundId)
+            throw new PermanentDbMessageException(
+                $"Cancellation identity does not match bet {message.BetId}.");
+
+        var roundMatches = await db.Rounds
+            .AsNoTracking()
+            .AnyAsync(round =>
+                    round.Id == message.RoundId &&
+                    round.TableId == message.TableId &&
+                    round.FencingToken == message.FencingToken,
+                cancellationToken);
+
+        if (!roundMatches)
+            throw new PermanentDbMessageException(
+                $"Cancellation for bet {message.BetId} does not match round ownership.");
+
+        var player = await db.Players
+            .FromSqlInterpolated(
+                $"SELECT * FROM Players WHERE Id = {message.PlayerId} FOR UPDATE")
+            .SingleOrDefaultAsync(cancellationToken)
+            ?? throw new PermanentDbMessageException(
+                $"Player {message.PlayerId} does not exist for cancellation {message.BetId}.");
+
+        if (bet.Status == BetStatus.Canceled)
+            return player.BalanceInUSD;
+
+        if (bet.Status != BetStatus.Accepted || message.Sequence <= bet.PersistenceSequence)
+            throw new PermanentDbMessageException(
+                $"Bet {message.BetId} cannot be cancelled from {bet.Status}.");
+
+        player.BalanceInUSD += bet.StakeAmount;
+        bet.Status = BetStatus.Canceled;
+        bet.PayoutAmount = bet.StakeAmount;
+        bet.Pl = 0;
+        bet.SettledAt = DateTimeOffset.UtcNow;
+        bet.PersistenceSequence = message.Sequence;
+        return player.BalanceInUSD;
+    }
+
+    private async Task<decimal> GetPlayerBalance(
+        DbWorkerMessagePayload message,
+        CancellationToken cancellationToken)
+    {
+        var playerId = message switch
+        {
+            BetAcceptedForPersistence accepted => accepted.PlayerId,
+            BetSettledForPersistence settled => settled.PlayerId,
+            BetCanceledForPersistence cancelled => cancelled.PlayerId,
+            _ => throw new InvalidDbMessageException("Unsupported DB message payload.")
+        };
+
+        return await db.Players.AsNoTracking()
+            .Where(player => player.Id == playerId)
+            .Select(player => player.BalanceInUSD)
+            .SingleAsync(cancellationToken);
     }
 
     private static void ValidateAcceptedMessage(BetAcceptedForPersistence message)
@@ -369,6 +453,7 @@ public sealed class DbWorkerMessageProcessor(
         return status is BetStatus.CashedOut
             or BetStatus.Lost
             or BetStatus.Won
-            or BetStatus.Cashback;
+            or BetStatus.Cashback
+            or BetStatus.Canceled;
     }
 }

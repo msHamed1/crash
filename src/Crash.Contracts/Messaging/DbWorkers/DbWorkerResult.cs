@@ -9,9 +9,9 @@ public enum DbWorkerResultStatus
 
 public enum DbWorkerResultMessageType
 {
-    Bet,
-    Result,
-    Rollback
+    BetAccepted,
+    BetSettled,
+    BetCancelled
 }
 
 public sealed record BetPersistenceResult(
@@ -27,6 +27,12 @@ public sealed record BetPersistenceResult(
     long Sequence,
     DbWorkerResultMessageType Type,
     DbWorkerResultStatus Status,
+    BetSettlementStatus? SettlementStatus,
+    decimal UpdatedBalance,
+    decimal PayoutAmount,
+    decimal ProfitLoss,
+    decimal? CashoutMultiplier,
+    DateTimeOffset? SettledAt,
     string? ErrorCode,
     string? ErrorMessage,
     DateTimeOffset CompletedAt);

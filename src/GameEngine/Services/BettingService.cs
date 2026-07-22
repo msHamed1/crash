@@ -1,12 +1,9 @@
+using System.Collections.Concurrent;
 using Crash.Contracts.Messaging.DbWorkers;
 using Crash.Contracts.Messaging.EngineToGateway.Bets;
 using Crash.Domain.Entities;
 using Crash.Domain.Options;
 using Crash.Domain.State;
-using Crash.Persistence.Repositories;
-using Crash.Persistence.Results;
-using Crash.Persistence.Results.Settlement;
-using GameEngine.Messaging;
 using GameEngine.Application.Commands.Bets;
 using GameEngine.Messaging.Publishers;
 
@@ -16,9 +13,10 @@ public sealed class BettingService(
     IWssGatewayPublisher publisher,
     ILogger<BettingService> logger,
     GameEngineOptions options,
-    IDbWorkerPublisher  dbWorkerPublisher,
-    IServiceScopeFactory scopeFactory)
+    IDbWorkerPublisher dbWorkerPublisher)
 {
+    private readonly ConcurrentDictionary<string, byte> _pendingSettlements = new();
+
     public async Task PlaceBetAsync(
         PlaceBetCommand command,
         TableRuntimeState table,
@@ -121,13 +119,7 @@ public sealed class BettingService(
                     ,
                     Type : DbWorkerMessageType.BetAccepted)
             , ct);
-            // using var scope = scopeFactory.CreateScope();
-            // var repository = scope.ServiceProvider.GetRequiredService<IBetRepository>();
-            // result = await repository.TryPlaceBetAsync(
-            //     bet,
-            //     table.TableId,
-            //     table.FencingToken,
-            //     ct);
+
         }
         catch (Exception exception)
         {
@@ -149,14 +141,8 @@ public sealed class BettingService(
         //     return;
         // }
 
-        table.SetPlayerBalance(player,  bet.Player.BalanceInUSD);
-        await PublishAccepted(
-            command,
-            table.TableId,
-            playerId,
-            bet.Player.BalanceInUSD,
-            bet,
-            ct);
+        // The accepted notification is emitted from the DB-worker completion
+        // handler, after the transaction commits and memory is synchronized.
     }
 
     private Task PublishAccepted(
@@ -223,33 +209,18 @@ public sealed class BettingService(
             return;
         }
 
-        using var scope = scopeFactory.CreateScope();
-        var repository = scope.ServiceProvider.GetRequiredService<IBetRepository>();
-        var result = await repository.TrySettleCashoutAsync(
-            command.BetId,
-            playerId,
-            roundId,
+        await PublishSettlementAsync(
+            bet,
+            BetSettlementStatus.CashedOut,
             round.CurrentMultiplier,
-            false,
-            table.TableId,
-            table.FencingToken,
+            bet.StakeAmount * round.CurrentMultiplier,
+            table,
             ct);
-
-        if (!result.Succeeded)
-            return;
-
-        table.ApplyCommittedCashout(
-            result.BetId,
-            result.CashoutMultiplier,
-            result.PayoutAmount,
-            result.UpdatedBalance,
-            result.SettledAt);
-
-        await PublishCashoutAsync(result, table.TableId, ct);
     }
 
-    public bool ProcessBetPersistenceCompleted(
-        DbBetPersistenceCompletedCommand message)
+    public async Task<bool> ProcessBetPersistenceCompleted(
+        DbBetPersistenceCompletedCommand message,
+        CancellationToken ct)
     {
         if (!long.TryParse(message.TableId, out var tableId) ||
             !options.Tables.TryGetValue(tableId, out var table))
@@ -269,28 +240,80 @@ public sealed class BettingService(
             return false;
         }
 
-        var bet = round.GetBet(message.PlayerId);
-
-        if (bet is null)
-        {
+        if (message.Status is not (DbWorkerResultStatus.Committed or DbWorkerResultStatus.AlreadyProcessed))
             return false;
-        }
 
-        if (message.IsCreated)
+        if (message.ResultType == DbWorkerResultMessageType.BetCancelled)
         {
-            table.SetBetIsPersisted(message.PlayerId, messageRoundId);
+            if (!table.GetPlayer(message.PlayerId, out var cancelledPlayer) || cancelledPlayer is null)
+                return false;
+
+            table.SetPlayerBalance(cancelledPlayer, message.UpdatedBalance);
+            await PublishRejected(message.BetId, table.TableId, message.PlayerId,
+                "BET_CANCELLED", "The bet was cancelled before the round started.",
+                message.UpdatedBalance, ct);
             return true;
         }
 
-        table.GetPlayer(message.PlayerId, out var player);
+        var bet = round.GetBet(message.PlayerId);
+        if (bet is null)
+        {
+            // The ticker may already have removed and refunded an unconfirmed
+            // bet while this acceptance acknowledgement was in flight.
+            return message.ResultType == DbWorkerResultMessageType.BetAccepted;
+        }
 
-        var cancelledBet = table.TryCancelBet(
-            playerId: message.PlayerId,
-            roundId: messageRoundId);
+        if (message.ResultType == DbWorkerResultMessageType.BetAccepted)
+        {
+            if (bet.IsPersisted)
+                return true;
 
-           PublishRejected(Guid.NewGuid().ToString(), table.TableId, player.PlayerId,
-            "BET_PROCESSING_FAILED", "The bet could not be processed.",  player.Balance, CancellationToken.None);
-         return cancelledBet is not null;
+            var persistedBet = table.SetBetIsPersisted(message.PlayerId, messageRoundId);
+            if (persistedBet is null || !table.GetPlayer(message.PlayerId, out var acceptedPlayer) || acceptedPlayer is null)
+                return false;
+
+            table.SetPlayerBalance(acceptedPlayer, message.UpdatedBalance);
+            persistedBet.Player.BalanceInUSD = message.UpdatedBalance;
+            await publisher.PublishAsync(new BetAccepted
+            {
+                TableId = table.TableId,
+                MessageId = persistedBet.BetId,
+                PlayerId = message.PlayerId,
+                UpdatedBalance = message.UpdatedBalance,
+                Bet = persistedBet
+            }, ct);
+            return true;
+        }
+
+        if (message.ResultType != DbWorkerResultMessageType.BetSettled ||
+            message.SettlementStatus is null || message.SettledAt is null)
+            return false;
+
+        _pendingSettlements.TryRemove(message.BetId, out _);
+
+        if (message.SettlementStatus == BetSettlementStatus.Lost)
+        {
+            var currentBet = table.GetPlayerBet(messageRoundId, message.PlayerId);
+            return currentBet?.Status == BetStatus.Lost ||
+                   table.ApplyCommittedLoss(message.BetId, message.SettledAt.Value);
+        }
+
+        if (message.SettlementStatus != BetSettlementStatus.CashedOut ||
+            message.CashoutMultiplier is null)
+            return false;
+
+        var applied = table.ApplyCommittedCashout(
+            message.BetId,
+            message.CashoutMultiplier.Value,
+            message.PayoutAmount,
+            message.UpdatedBalance,
+            message.SettledAt.Value);
+
+        if (!applied)
+            return table.GetPlayerBet(messageRoundId, message.PlayerId)?.Status == BetStatus.CashedOut;
+
+        await PublishCashoutAsync(message, table.TableId, ct);
+        return true;
     }
     public async Task ProcessAutoCashoutsAsync(
         TableRuntimeState table,
@@ -304,39 +327,22 @@ public sealed class BettingService(
 
         foreach (var candidate in candidates)
         {
-            using var scope = scopeFactory.CreateScope();
-
-            var repository =
-                scope.ServiceProvider.GetRequiredService<IBetRepository>();
-
-            var result = await repository.TrySettleCashoutAsync(
-                candidate.BetId,
-                candidate.PlayerId,
-                candidate.RoundId,
-                candidate.CashoutMultiplier,
-                true,
-                table.TableId,
-                table.FencingToken,
-                ct);
-
-            if (!result.Succeeded)
+            var bet = table.GetPlayerBet(candidate.RoundId, candidate.PlayerId);
+            if (bet is null)
                 continue;
 
-            // Update memory only after the DB transaction commits.
-            table.ApplyCommittedCashout(
-                result.BetId,
-                result.CashoutMultiplier,
-                result.PayoutAmount,
-                result.UpdatedBalance,
-                result.SettledAt);
-
-            // Publish successful cashout message after memory is synchronized.
-            await PublishCashoutAsync(result, table.TableId, ct);
+            await PublishSettlementAsync(
+                bet,
+                BetSettlementStatus.CashedOut,
+                candidate.CashoutMultiplier,
+                candidate.StakeAmount * candidate.CashoutMultiplier,
+                table,
+                ct);
         }
     }
 
     private Task PublishCashoutAsync(
-        CashoutSettlementResult result,
+        DbBetPersistenceCompletedCommand result,
         long tableId,
         CancellationToken ct)
     {
@@ -347,12 +353,12 @@ public sealed class BettingService(
             MessageId = $"cashout:{result.BetId}",
             PlayerId = result.PlayerId,
             BetId = result.BetId,
-            RoundId = result.RoundId,
-            CashoutMultiplier = result.CashoutMultiplier,
+            RoundId = long.Parse(result.RoundId),
+            CashoutMultiplier = result.CashoutMultiplier!.Value,
             PayoutAmount = result.PayoutAmount,
-            NetResultAmount = result.NetResultAmount,
+            NetResultAmount = result.ProfitLoss,
             UpdatedBalance = result.UpdatedBalance,
-            CashedOutAt = result.SettledAt
+            CashedOutAt = result.SettledAt!.Value
         }, ct);
     }
     
@@ -362,23 +368,57 @@ public sealed class BettingService(
         long roundId,
         CancellationToken ct)
     {
-        using var scope = scopeFactory.CreateScope();
+        var bets = table.GetCurrentRound()?.GetBetsSnapshot()
+            .Where(bet => bet.RoundId == roundId && bet.Status == BetStatus.Accepted)
+            .ToArray() ?? [];
 
-        var repository =
-            scope.ServiceProvider.GetRequiredService<IBetRepository>();
-
-        var results =
-            await repository.SettleOpenBetsAsLostAsync(
-                roundId,
-                table.TableId,
-                table.FencingToken,
-                ct);
-
-        foreach (var result in results)
+        foreach (var bet in bets)
         {
-            table.ApplyCommittedLoss(
-                result.BetId,
-                result.SettledAt);
+            await PublishSettlementAsync(
+                bet,
+                BetSettlementStatus.Lost,
+                null,
+                0,
+                table,
+                ct);
+        }
+    }
+
+    private async Task PublishSettlementAsync(
+        Bet bet,
+        BetSettlementStatus status,
+        decimal? cashoutMultiplier,
+        decimal payoutAmount,
+        TableRuntimeState table,
+        CancellationToken ct)
+    {
+        if (!_pendingSettlements.TryAdd(bet.BetId, 0))
+            return;
+
+        var settledAt = DateTimeOffset.UtcNow;
+        try
+        {
+            await dbWorkerPublisher.PublishAsync(new DbWorkerMessageEnvelope(
+            MessageId: Guid.NewGuid(),
+            Type: DbWorkerMessageType.BetSettled,
+            Payload: new BetSettledForPersistence(
+                BetId: bet.BetId,
+                PlayerId: bet.PlayerId,
+                TableId: table.TableId,
+                RoundId: bet.RoundId,
+                Status: status,
+                PayoutAmount: payoutAmount,
+                ProfitLoss: payoutAmount - bet.StakeAmount,
+                CashoutMultiplier: cashoutMultiplier,
+                FencingToken: table.FencingToken,
+                Sequence: 2,
+                SettledAt: settledAt),
+                CreatedAt: settledAt), ct);
+        }
+        catch
+        {
+            _pendingSettlements.TryRemove(bet.BetId, out _);
+            throw;
         }
     }
 }
