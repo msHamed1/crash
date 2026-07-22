@@ -1,6 +1,7 @@
 using Crash.Domain.Entities;
 using Crash.Persistence;
 using Microsoft.EntityFrameworkCore;
+using System.Data;
 
 namespace GameEngine.Repository;
 
@@ -151,17 +152,47 @@ public class TableRepository:ITableRepository
             await _db.SaveChangesAsync(ct);
         }
 
-        // We need tp reserve seat in table atomically;
-        // 1. Try to find an active table with free seat
-        // 2. Safely increment PlayersCount
-        // 3. If no table found, create a new table
-        // 4. Add player to table
-        // 5. Return table;
+        // Table allocation must be serialized across every gateway instance.
+        // A normal SELECT followed by INSERT allows multiple concurrent requests
+        // to all observe "no available table" and each create a one-player table.
         const int maxPlayers = 200;
         var now = DateTimeOffset.UtcNow;
+        var connection = _db.Database.GetDbConnection();
+        var openedHere = connection.State != ConnectionState.Open;
 
-        for (var attempt = 0; attempt < 5; attempt++)
+        if (openedHere)
+            await _db.Database.OpenConnectionAsync(ct);
+
+        var allocationLockName = $"{connection.Database}:crash-table-allocation";
+        var lockAcquired = false;
+
+        try
         {
+            lockAcquired = await AcquireAllocationLockAsync(
+                connection,
+                allocationLockName,
+                ct);
+
+            if (!lockAcquired)
+            {
+                throw new TimeoutException(
+                    "Timed out waiting for the table-allocation lock.");
+            }
+
+            // Another request for the same player may have completed while this
+            // request was waiting for the allocator lock. Re-read from the DB.
+            var assignedTableId = await _db.Players
+                .AsNoTracking()
+                .Where(candidate => candidate.Id == player.Id)
+                .Select(candidate => candidate.TableId)
+                .SingleAsync(ct);
+
+            if (assignedTableId is { } currentTableId)
+            {
+                player.TableId = currentTableId;
+                return await LoadTableAsync(currentTableId, ct);
+            }
+
             await using var transaction = await _db.Database.BeginTransactionAsync(ct);
 
             var tableId = await _db.Tables
@@ -176,11 +207,13 @@ public class TableRepository:ITableRepository
                 {
                     PlayersCount = 1,
                     CreatedAt = now,
-                    TableName = "Crash table",
-                    Players = new List<Player> { player }
+                    TableName = "Crash table"
                 };
 
                 _db.Tables.Add(newTable);
+                await _db.SaveChangesAsync(ct);
+
+                player.TableId = newTable.Id;
                 await _db.SaveChangesAsync(ct);
                 await transaction.CommitAsync(ct);
 
@@ -196,7 +229,8 @@ public class TableRepository:ITableRepository
             if (updatedRows == 0)
             {
                 await transaction.RollbackAsync(ct);
-                continue;
+                throw new InvalidOperationException(
+                    $"Could not reserve a seat in table {tableId} while holding the allocation lock.");
             }
 
             player.TableId = tableId;
@@ -204,12 +238,55 @@ public class TableRepository:ITableRepository
             await _db.SaveChangesAsync(ct);
             await transaction.CommitAsync(ct);
 
-            return await _db.Tables
-                .AsNoTracking()
-                .Include(t => t.Players)
-                .FirstAsync(t => t.Id == tableId, ct);
+            return await LoadTableAsync(tableId, ct);
         }
+        finally
+        {
+            if (lockAcquired)
+                await ReleaseAllocationLockAsync(connection, allocationLockName);
 
-        throw new InvalidOperationException("Could not reserve a table seat after retries.");
+            if (openedHere)
+                await _db.Database.CloseConnectionAsync();
+        }
+    }
+
+    private async Task<Table> LoadTableAsync(long tableId, CancellationToken ct)
+    {
+        return await _db.Tables
+            .AsNoTracking()
+            .Include(table => table.Players)
+            .FirstAsync(table => table.Id == tableId, ct);
+    }
+
+    private static async Task<bool> AcquireAllocationLockAsync(
+        System.Data.Common.DbConnection connection,
+        string lockName,
+        CancellationToken ct)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT GET_LOCK(@lockName, 30);";
+
+        var parameter = command.CreateParameter();
+        parameter.ParameterName = "@lockName";
+        parameter.Value = lockName;
+        command.Parameters.Add(parameter);
+
+        var result = await command.ExecuteScalarAsync(ct);
+        return result is not null && result != DBNull.Value && Convert.ToInt32(result) == 1;
+    }
+
+    private static async Task ReleaseAllocationLockAsync(
+        System.Data.Common.DbConnection connection,
+        string lockName)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT RELEASE_LOCK(@lockName);";
+
+        var parameter = command.CreateParameter();
+        parameter.ParameterName = "@lockName";
+        parameter.Value = lockName;
+        command.Parameters.Add(parameter);
+
+        await command.ExecuteScalarAsync(CancellationToken.None);
     }
 }
