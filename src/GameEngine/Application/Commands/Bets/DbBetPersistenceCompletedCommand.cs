@@ -9,6 +9,8 @@ public record DbBetPersistenceCompletedCommand: GameCommand
     public required DbWorkerResultStatus Status { get; init; }
     public string? ErrorCode { get; init; }
     public bool IsCreated { get; init; }
+    
+    public long PlayerId { get; init; }
 
     public override string MessageType  => "BetPersistenceCompleted";
 }

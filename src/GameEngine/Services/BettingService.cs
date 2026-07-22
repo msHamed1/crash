@@ -1,17 +1,22 @@
+using Crash.Contracts.Messaging.DbWorkers;
 using Crash.Contracts.Messaging.EngineToGateway.Bets;
 using Crash.Domain.Entities;
+using Crash.Domain.Options;
 using Crash.Domain.State;
 using Crash.Persistence.Repositories;
 using Crash.Persistence.Results;
 using Crash.Persistence.Results.Settlement;
 using GameEngine.Messaging;
 using GameEngine.Application.Commands.Bets;
+using GameEngine.Messaging.Publishers;
 
 namespace GameEngine.Services;
 
 public sealed class BettingService(
-    IClientMessagePublisher publisher,
+    IWssGatewayPublisher publisher,
     ILogger<BettingService> logger,
+    GameEngineOptions options,
+    IDbWorkerPublisher  dbWorkerPublisher,
     IServiceScopeFactory scopeFactory)
 {
     public async Task PlaceBetAsync(
@@ -30,7 +35,7 @@ public sealed class BettingService(
 
         if (!long.TryParse(command.RoundId, out var roundId))
         {
-            await PublishRejected(command, table.TableId, playerId,
+            await PublishRejected(command.CorrelationId, table.TableId, playerId,
                 "INVALID_ROUND_ID", "RoundId must be a valid number.", 0, ct);
             return;
         }
@@ -43,7 +48,7 @@ public sealed class BettingService(
 
         if (!string.Equals(command.Currency, "USD", StringComparison.OrdinalIgnoreCase))
         {
-            await PublishRejected(command, table.TableId, playerId,
+            await PublishRejected(command.CorrelationId, table.TableId, playerId,
                 "UNSUPPORTED_CURRENCY", "Only USD bets are currently supported.", 0, ct);
             return;
         }
@@ -51,14 +56,14 @@ public sealed class BettingService(
         var currentRound = table.GetCurrentRoundSnapshot();
         if (currentRound?.RoundId != roundId)
         {
-            await PublishRejected(command, table.TableId, playerId,
+            await PublishRejected(command.CorrelationId, table.TableId, playerId,
                 "ROUND_NOT_BETTABLE", "The round is no longer accepting bets.", 0, ct);
             return;
         }
 
         if (!table.GetPlayer(playerId, out var player) || player is null)
         {
-            await PublishRejected(command, table.TableId, playerId,
+            await PublishRejected(command.CorrelationId, table.TableId, playerId,
                 "PLAYER_NOT_AT_TABLE", "The player has not joined this table.", 0, ct);
             return;
         }
@@ -93,21 +98,36 @@ public sealed class BettingService(
                 return;
             }
 
-            await PublishRejected(command, table.TableId, playerId,
+            await PublishRejected(command.CorrelationId, table.TableId, playerId,
                 "BET_REJECTED", "The bet is invalid, duplicated, or betting is closed.", player.Balance, ct);
             return;
         }
 
-        PlaceBetResult result;
+     //   PlaceBetResult result;
         try
         {
-            using var scope = scopeFactory.CreateScope();
-            var repository = scope.ServiceProvider.GetRequiredService<IBetRepository>();
-            result = await repository.TryPlaceBetAsync(
-                bet,
-                table.TableId,
-                table.FencingToken,
-                ct);
+            await dbWorkerPublisher.PublishAsync(new DbWorkerMessageEnvelope(MessageId : Guid.NewGuid(),
+                    CreatedAt : DateTimeOffset.UtcNow,
+                    Payload: new BetAcceptedForPersistence(AcceptedAt : DateTimeOffset.UtcNow,
+                        AutoCashoutMultiplier : command.AutoCashoutMultiplier,
+                        BetId : command.CorrelationId,
+                        Currency : command.Currency.ToUpperInvariant(),
+                        FencingToken : table.FencingToken,
+                        PlayerId : playerId,
+                        RoundId :roundId,
+                        Sequence : 1,
+                        StakeAmount : bet.StakeAmount,
+                        TableId :table.TableId)
+                    ,
+                    Type : DbWorkerMessageType.BetAccepted)
+            , ct);
+            // using var scope = scopeFactory.CreateScope();
+            // var repository = scope.ServiceProvider.GetRequiredService<IBetRepository>();
+            // result = await repository.TryPlaceBetAsync(
+            //     bet,
+            //     table.TableId,
+            //     table.FencingToken,
+            //     ct);
         }
         catch (Exception exception)
         {
@@ -116,26 +136,26 @@ public sealed class BettingService(
             logger.LogError(exception,
                 "Failed to place bet {BetId} for player {PlayerId} in round {RoundId}.",
                 bet.BetId, playerId, roundId);
-            await PublishRejected(command, table.TableId, playerId,
+            await PublishRejected(command.CorrelationId, table.TableId, playerId,
                 "BET_PROCESSING_FAILED", "The bet could not be processed.", player.Balance, ct);
             return;
         }
 
-        if (!result.IsAccepted || result.Bet is null)
-        {
-            table.RollbackBetInMemory(bet, player);
-            await PublishRejected(command, table.TableId, playerId,
-                result.Code, result.Message, player.Balance, ct);
-            return;
-        }
+        // if (!result.IsAccepted || result.Bet is null)
+        // {
+        //     table.RollbackBetInMemory(bet, player);
+        //     await PublishRejected(command.CorrelationId, table.TableId, playerId,
+        //         result.Code, result.Message, player.Balance, ct);
+        //     return;
+        // }
 
-        table.SetPlayerBalance(player, result.UpdatedBalance);
+        table.SetPlayerBalance(player,  bet.Player.BalanceInUSD);
         await PublishAccepted(
             command,
             table.TableId,
             playerId,
-            result.UpdatedBalance,
-            result.Bet,
+            bet.Player.BalanceInUSD,
+            bet,
             ct);
     }
 
@@ -161,7 +181,7 @@ public sealed class BettingService(
     
 
     private Task PublishRejected(
-        PlaceBetCommand command,
+        string correlationId,
         long tableId,
         long playerId,
         string code,
@@ -172,7 +192,7 @@ public sealed class BettingService(
         return publisher.PublishAsync(new BetRejected
         {
             TableId = tableId,
-            MessageId = command.CorrelationId,
+            MessageId =correlationId,
             PlayerId = playerId,
             UpdatedBalance = updatedBalance,
             Code = code,
@@ -227,8 +247,51 @@ public sealed class BettingService(
 
         await PublishCashoutAsync(result, table.TableId, ct);
     }
-    
-    
+
+    public bool ProcessBetPersistenceCompleted(
+        DbBetPersistenceCompletedCommand message)
+    {
+        if (!long.TryParse(message.TableId, out var tableId) ||
+            !options.Tables.TryGetValue(tableId, out var table))
+        {
+            return false;
+        }
+
+        if (!long.TryParse(message.RoundId, out var messageRoundId))
+        {
+            return false;
+        }
+
+        var round = table.GetCurrentRound();
+
+        if (round is null || round.RoundId != messageRoundId)
+        {
+            return false;
+        }
+
+        var bet = round.GetBet(message.PlayerId);
+
+        if (bet is null)
+        {
+            return false;
+        }
+
+        if (message.IsCreated)
+        {
+            table.SetBetIsPersisted(message.PlayerId, messageRoundId);
+            return true;
+        }
+
+        table.GetPlayer(message.PlayerId, out var player);
+
+        var cancelledBet = table.TryCancelBet(
+            playerId: message.PlayerId,
+            roundId: messageRoundId);
+
+           PublishRejected(Guid.NewGuid().ToString(), table.TableId, player.PlayerId,
+            "BET_PROCESSING_FAILED", "The bet could not be processed.",  player.Balance, CancellationToken.None);
+         return cancelledBet is not null;
+    }
     public async Task ProcessAutoCashoutsAsync(
         TableRuntimeState table,
         long roundId,

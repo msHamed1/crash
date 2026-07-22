@@ -38,6 +38,8 @@ public class Bet
     // Last ordered DB-worker event applied to this bet.
     public long PersistenceSequence { get; set; }
 
+    public bool IsPersisted { get; set; } = false;
+
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset? AcceptedAt { get; set; }
     public DateTimeOffset? CashedOutAt { get; set; }

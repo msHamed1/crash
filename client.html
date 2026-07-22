@@ -458,6 +458,51 @@
     }
     .bet-result strong { color: #fff; }
 
+    .toast-stack {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      z-index: 50;
+      display: grid;
+      gap: 10px;
+      width: min(360px, calc(100vw - 36px));
+      pointer-events: none;
+    }
+
+    .toast {
+      display: grid;
+      gap: 5px;
+      padding: 13px 14px;
+      border: 1px solid var(--border);
+      border-left: 4px solid #7b8494;
+      border-radius: 12px;
+      background: rgba(13, 17, 25, .96);
+      box-shadow: 0 18px 48px rgba(0, 0, 0, .34);
+      color: #fff;
+      animation: toast-in .16s ease-out;
+    }
+
+    .toast strong {
+      font-size: 13px;
+      font-weight: 900;
+    }
+
+    .toast span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .toast.success { border-left-color: var(--green); }
+    .toast.warning { border-left-color: var(--amber); }
+    .toast.danger { border-left-color: var(--red); }
+    .toast.info { border-left-color: #8ea2ff; }
+
+    @keyframes toast-in {
+      from { transform: translateY(8px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+
     .log-section {
       grid-column: 1 / -1;
     }
@@ -626,6 +671,7 @@
       <pre id="log"></pre>
     </section>
   </main>
+  <div id="toastStack" class="toast-stack" aria-live="polite" aria-atomic="false"></div>
 
   <script>
     let connection = null;
@@ -635,6 +681,7 @@
     let multiplierAnimationFrame = null;
     let activeBet = null;
     const receivedMessageIds = new Set();
+    const shownNotificationIds = new Set();
 
     const connectButton = document.getElementById("connectButton");
     const sendBetButton = document.getElementById("sendBetButton");
@@ -643,6 +690,7 @@
     const activeBetElement = document.getElementById("activeBet");
     const statusElement = document.getElementById("status");
     const logElement = document.getElementById("log");
+    const toastStackElement = document.getElementById("toastStack");
     const roundStateElement = document.getElementById("roundState");
     const roundIdElement = document.getElementById("roundId");
     const currentMultiplierElement = document.getElementById("currentMultiplier");
@@ -792,6 +840,74 @@
     }
 
     function registerServerMessageHandlers(hubConnection) {
+      const handleBetAccepted = message => {
+        if (markNotificationSeen(message, "BetAccepted")) {
+          return;
+        }
+        const bet = readField(message, "bet", "Bet");
+        const stakeAmount = Number(readField(bet, "stakeAmount", "StakeAmount") ?? 0);
+        activeBet = {
+          betId: String(readField(bet, "betId", "BetId")),
+          roundId: String(readField(bet, "roundId", "RoundId")),
+          correlationId: readField(message, "messageId", "MessageId"),
+          status: "Accepted",
+          stakeAmount
+        };
+        updateBalance(readField(message, "updatedBalance", "UpdatedBalance"));
+        renderBetState();
+        showToast({
+          type: "success",
+          title: "Bet accepted",
+          message: `${formatMoney(stakeAmount)} accepted for round #${activeBet.roundId}.`
+        });
+        appendLog("bet accepted", message);
+      };
+
+      const handleBetRejected = message => {
+        if (markNotificationSeen(message, "BetRejected")) {
+          return;
+        }
+        const messageId = readField(message, "messageId", "MessageId");
+        const code = readField(message, "code", "Code") ?? "BET_REJECTED";
+        const reason = readField(message, "reason", "Reason") ?? "The bet was rejected.";
+        if (!activeBet
+            || !messageId
+            || activeBet.correlationId === messageId
+            || activeBet.betId === messageId) {
+          activeBet = null;
+        }
+        updateBalance(readField(message, "updatedBalance", "UpdatedBalance"));
+        renderBetState();
+        betStatusElement.textContent = `Rejected · ${code}`;
+        showToast({
+          type: code === "OPERATOR_ERROR" ? "warning" : "danger",
+          title: "Bet rejected",
+          message: `${reason} (${code})`
+        });
+        appendLog("bet rejected", message);
+      };
+
+      const handleBetCashedOut = message => {
+        if (markNotificationSeen(message, "BetCashedOut")) {
+          return;
+        }
+        const betId = String(readField(message, "betId", "BetId"));
+        const multiplier = Number(readField(message, "cashoutMultiplier", "CashoutMultiplier"));
+        const payoutAmount = Number(readField(message, "payoutAmount", "PayoutAmount"));
+        updateBalance(readField(message, "updatedBalance", "UpdatedBalance"));
+        if (activeBet?.betId === betId) {
+          activeBet.status = `Cashed out @ ${formatMultiplier(multiplier)}`;
+        }
+        renderBetState();
+        cashOutButton.disabled = true;
+        showToast({
+          type: "success",
+          title: "Bet cashed out",
+          message: `${formatMoney(payoutAmount)} paid at ${formatMultiplier(multiplier)}.`
+        });
+        appendLog("bet cashed out", message);
+      };
+
       hubConnection.on("NewRoundInfo", message => {
         acceptRoundMessage(message, "NewRoundInfo");
       });
@@ -807,6 +923,11 @@
             && !activeBet.status.startsWith("Cashed out")) {
           activeBet.status = "Lost";
           renderBetState();
+          showToast({
+            type: "danger",
+            title: "Bet lost",
+            message: `Round #${crashedRoundId} crashed before cashout.`
+          });
         }
       });
 
@@ -814,41 +935,13 @@
         acceptRoundMessage(message, "CurrentState");
       });
 
-      hubConnection.on("PlayerBetAccepted", message => {
-        const bet = readField(message, "bet", "Bet");
-        activeBet = {
-          betId: String(readField(bet, "betId", "BetId")),
-          roundId: String(readField(bet, "roundId", "RoundId")),
-          correlationId: readField(message, "messageId", "MessageId"),
-          status: "Accepted",
-          stakeAmount: Number(readField(bet, "stakeAmount", "StakeAmount") ?? 0)
-        };
-        updateBalance(readField(message, "updatedBalance", "UpdatedBalance"));
-        renderBetState();
-        appendLog("bet accepted", message);
-      });
-
-      hubConnection.on("PlayerBetRejected", message => {
-        const messageId = readField(message, "messageId", "MessageId");
-        if (!activeBet || !messageId || activeBet.correlationId === messageId) {
-          activeBet = null;
-        }
-        betStatusElement.textContent = `Rejected · ${readField(message, "code", "Code") ?? "BET_REJECTED"}`;
-        updateBalance(readField(message, "updatedBalance", "UpdatedBalance"));
-        renderBetState();
-        appendLog("bet rejected", message);
-      });
-
-      hubConnection.on("BetCashedOut", message => {
-        const betId = String(readField(message, "betId", "BetId"));
-        updateBalance(readField(message, "updatedBalance", "UpdatedBalance"));
-        if (activeBet?.betId === betId) {
-          activeBet.status = `Cashed out @ ${Number(readField(message, "cashoutMultiplier", "CashoutMultiplier")).toFixed(2)}x`;
-        }
-        renderBetState();
-        cashOutButton.disabled = true;
-        appendLog("bet cashed out", message);
-      });
+      hubConnection.on("PlayerBetAccepted", handleBetAccepted);
+      hubConnection.on("PlayerBetApproved", handleBetAccepted);
+      hubConnection.on("BetAccepted", handleBetAccepted);
+      hubConnection.on("BetApproved", handleBetAccepted);
+      hubConnection.on("PlayerBetRejected", handleBetRejected);
+      hubConnection.on("BetRejected", handleBetRejected);
+      hubConnection.on("BetCashedOut", handleBetCashedOut);
     }
 
     function acceptRoundMessage(message, messageType) {
@@ -1055,6 +1148,56 @@
       if (Number.isFinite(balance)) {
         playerBalanceElement.textContent = `${balance.toFixed(2)} USD`;
       }
+    }
+
+    function markNotificationSeen(message, eventName) {
+      const messageId = readField(message, "messageId", "MessageId");
+      if (!messageId) {
+        return false;
+      }
+
+      const key = `${eventName}:${messageId}`;
+      if (shownNotificationIds.has(key)) {
+        return true;
+      }
+
+      shownNotificationIds.add(key);
+      if (shownNotificationIds.size > 500) {
+        shownNotificationIds.delete(shownNotificationIds.values().next().value);
+      }
+      return false;
+    }
+
+    function showToast({ type = "info", title, message }) {
+      const toast = document.createElement("div");
+      toast.className = `toast ${type}`;
+
+      const titleElement = document.createElement("strong");
+      titleElement.textContent = title;
+
+      const messageElement = document.createElement("span");
+      messageElement.textContent = message;
+
+      toast.append(titleElement, messageElement);
+      toastStackElement.prepend(toast);
+
+      while (toastStackElement.children.length > 4) {
+        toastStackElement.lastElementChild?.remove();
+      }
+
+      window.setTimeout(() => {
+        toast.remove();
+      }, 5200);
+    }
+
+    function formatMoney(value) {
+      const amount = Number(value);
+      return Number.isFinite(amount) ? `${amount.toFixed(2)} USD` : "0.00 USD";
+    }
+
+    function formatMultiplier(value) {
+      const multiplier = Number(value);
+      return Number.isFinite(multiplier) ? `${multiplier.toFixed(2)}x` : "-";
     }
 
     function renderBetState() {

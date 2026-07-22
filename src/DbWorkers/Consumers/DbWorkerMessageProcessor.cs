@@ -46,7 +46,7 @@ public sealed class DbWorkerMessageProcessor(
                 await transaction.RollbackAsync(cancellationToken);
                 return DbMessageProcessResult.AlreadyProcessed;
             }
-
+ 
             switch (message)
             {
                 case
@@ -125,7 +125,11 @@ public sealed class DbWorkerMessageProcessor(
         CancellationToken cancellationToken)
     {
         ValidateAcceptedMessage(message);
-
+        if (message.PlayerId == 1)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(8), cancellationToken);
+            
+        }
         var existingBet = await db.Bets
             .FromSqlInterpolated(
                 $"SELECT * FROM Bets WHERE BetId = {message.BetId} FOR UPDATE")

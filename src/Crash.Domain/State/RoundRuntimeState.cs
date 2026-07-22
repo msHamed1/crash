@@ -59,12 +59,16 @@ public sealed class RoundRuntimeState
         return _betsByPlayer.GetValueOrDefault(playerId);
     }
 
-    public IReadOnlyCollection<Bet> GetBetsSnapshot()
+    
+
+public IReadOnlyCollection<Bet> GetBetsSnapshot()
     {
         // Return a snapshot so callers cannot mutate the authoritative
         // collection or enumerate it while it is being changed.
         return _betsByPlayer.Values.ToArray();
     }
+
+    
 
     public List<Bet> SettleCurrentRoundBetsIfNeeded()
     {

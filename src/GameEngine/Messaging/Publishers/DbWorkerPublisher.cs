@@ -5,14 +5,14 @@ using Crash.Contracts.Messaging.DbWorkers;
 using Crash.Domain.Options;
 using RabbitMQ.Client;
 
-namespace GameEngine.Messaging;
+namespace GameEngine.Messaging.Publishers;
+ 
 
-
-public interface IDbWorkerMessagePublisher
+public interface IDbWorkerPublisher
 {
     Task PublishAsync(DbWorkerMessageEnvelope message, CancellationToken ct);
 }
-public class DbWorkerMessagePublisher :IDbWorkerMessagePublisher, IDisposable
+public class DbWorkerPublisher :IDbWorkerPublisher, IDisposable
 {
     
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -24,7 +24,7 @@ public class DbWorkerMessagePublisher :IDbWorkerMessagePublisher, IDisposable
     private readonly IModel channel;
     private readonly object publishLock = new();
 
-    public DbWorkerMessagePublisher(DbBrokerOptions options  )
+    public DbWorkerPublisher(DbBrokerOptions options  )
     {
         this.options = options;
         connection = CreateConnection(options);
@@ -52,18 +52,22 @@ public class DbWorkerMessagePublisher :IDbWorkerMessagePublisher, IDisposable
                 durable: true,
                 autoDelete:false
                 );
-            channel.QueueDeclare(
-                queue: GetTableQueueName(),
-                durable: true,
-                exclusive: false,
-                autoDelete: false
-            );
             
-            channel.QueueBind(
-                queue: GetTableQueueName(),
-                exchange: options.ExchangeName,
-                routingKey:"DbWorkers");
+            // DB worker wons the queue decalration
+
+            // channel.QueueDeclare(
+            //     queue: GetTableQueueName(),
+            //     durable: true,
+            //     exclusive: false,
+            //     autoDelete: false
+            // );
             
+            // DB worker wons the queue decalration
+            // channel.QueueBind(
+            //     queue: GetTableQueueName(),
+            //     exchange: options.ExchangeName,
+            //     routingKey:"DbWorkers");
+            //
             
             // Use message type as the routing key so the message lands in that table's durable queue.
             channel.BasicPublish(

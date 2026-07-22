@@ -10,7 +10,8 @@ namespace Crash.Contracts.Messaging.DbWorkers;
 public enum DbWorkerMessageType
 {
     BetAccepted,
-    BetSettled
+    BetSettled,
+    BetCancelled,
 }
 
 /// <summary>
@@ -51,6 +52,17 @@ public sealed record BetAcceptedForPersistence(
     long FencingToken,
     long Sequence,
     DateTimeOffset AcceptedAt)
+    : DbWorkerMessagePayload(TableId, RoundId, FencingToken, Sequence);
+
+
+public sealed record BetCanceledForPersistence(
+    string BetId,
+    long PlayerId,
+    long TableId,
+    long RoundId,
+    long FencingToken,
+    long Sequence
+    )
     : DbWorkerMessagePayload(TableId, RoundId, FencingToken, Sequence);
 
 public sealed record BetSettledForPersistence(

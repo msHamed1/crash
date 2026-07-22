@@ -12,42 +12,31 @@
  using GameEngine.Application.Commands.Bets;
  using GameEngine.Application.Commands.Players;
  using GameEngine.Application.Commands.Rounds;
+ using GameEngine.Messaging.Publishers;
 
  namespace GameEngine.Services;
 
-public sealed class RoundsService : BackgroundService
+public sealed class RoundsService(
+    ILogger<RoundsService> logger,
+    GameEngineOptions options,
+    IServiceScopeFactory scopeFactory,
+    Rng.RngClient rngClient,
+    IWssGatewayPublisher publisher,
+    BettingService bettingService)
+    : BackgroundService
 {
-    private readonly Rng.RngClient _rngClient;
-    private readonly ILogger<RoundsService> _logger;
-    private readonly GameEngineOptions _options;
-    private readonly IServiceScopeFactory _scopeFactory;
-    private readonly Channel<GameCommand> _lifecycleChannel;
-    private readonly Channel<AdvanceRoundCommand> _tickChannel;
-    private readonly IClientMessagePublisher _publisher;
-    private readonly BettingService _bettingService;
-
-
- 
-    public RoundsService(ILogger<RoundsService> logger, GameEngineOptions options, IServiceScopeFactory scopeFactory,Rng.RngClient rngClient,IClientMessagePublisher publisher,BettingService bettingService)
+    private readonly Channel<GameCommand> _lifecycleChannel = Channel.CreateUnbounded<GameCommand>(new UnboundedChannelOptions
     {
-        _logger = logger;
-        _scopeFactory = scopeFactory;
-        _options = options;
-        _publisher = publisher;
-        _rngClient = rngClient;
-        _bettingService = bettingService;
-        _lifecycleChannel = Channel.CreateUnbounded<GameCommand>(new UnboundedChannelOptions
-        {
-            SingleReader = true,
-            SingleWriter = false
-        });
-        _tickChannel = Channel.CreateBounded<AdvanceRoundCommand>(new BoundedChannelOptions(1024)
-        {
-            SingleReader = true,
-            SingleWriter = false,
-            FullMode = BoundedChannelFullMode.DropOldest
-        });
-    }
+        SingleReader = true,
+        SingleWriter = false
+    });
+    private readonly Channel<AdvanceRoundCommand> _tickChannel = Channel.CreateBounded<AdvanceRoundCommand>(new BoundedChannelOptions(1024)
+    {
+        SingleReader = true,
+        SingleWriter = false,
+        FullMode = BoundedChannelFullMode.DropOldest
+    });
+
 
     public ValueTask EnqueueAsync(GameCommand command, CancellationToken ct = default)
     {
@@ -79,7 +68,7 @@ public sealed class RoundsService : BackgroundService
         {
             if (command is AdvanceRoundCommand tick)
             {
-                _logger.LogDebug(
+                logger.LogDebug(
                     "Processing tick {TickSequence} for round {RoundId}, table {TableId}",
                     tick.TickSequence,
                     tick.RoundId,
@@ -87,15 +76,15 @@ public sealed class RoundsService : BackgroundService
             }
             else
             {
-                _logger.LogInformation(
+                logger.LogInformation(
                     "Processing {MessageType} for table {TableId}",
                     command.MessageType,
                     command.TableId);
             }
-            _options.Tables.TryGetValue(long.Parse(command.TableId), out var table);
+            options.Tables.TryGetValue(long.Parse(command.TableId), out var table);
             if (table is null)
             {
-                _logger.LogWarning("Ignoring command {MessageType} for unowned table {TableId}", command.MessageType, command.TableId);
+                logger.LogWarning("Ignoring command {MessageType} for unowned table {TableId}", command.MessageType, command.TableId);
                 return;
             }
             switch (command)
@@ -119,7 +108,7 @@ public sealed class RoundsService : BackgroundService
                         ct);
                     break;
                 case CashOutBetCommand cashOutCommand:
-                    await _bettingService.CashOutAsync(cashOutCommand, table, ct);
+                    await bettingService.CashOutAsync(cashOutCommand, table, ct);
                     break;
                 case CrashRoundCommand roundCrashCommand:
                     await ProcessRoundCrashedCommand(
@@ -128,7 +117,7 @@ public sealed class RoundsService : BackgroundService
                         ct);
                     break;
                 case ProcessAutoCashoutsCommand autoCashoutsCommand:
-                    await _bettingService.ProcessAutoCashoutsAsync(
+                    await bettingService.ProcessAutoCashoutsAsync(
                         table,
                         long.Parse(autoCashoutsCommand.RoundId),
                         autoCashoutsCommand.CurrentMultiplier,
@@ -144,7 +133,7 @@ public sealed class RoundsService : BackgroundService
         }
         catch (Exception e)
         {
-            _logger.LogError(e, "Error processing Table {TableId}", command.TableId);
+            logger.LogError(e, "Error processing Table {TableId}", command.TableId);
             
         }
     
@@ -156,7 +145,7 @@ public sealed class RoundsService : BackgroundService
         if (!IsCurrentRound(table, roundCrashCommand.RoundId))
             return;
 
-        using var scope = _scopeFactory.CreateScope();
+        using var scope = scopeFactory.CreateScope();
         var repository = scope.ServiceProvider.GetRequiredService<IRoundRepository>();
         var roundId = long.Parse(roundCrashCommand.RoundId);
         var tableId = long.Parse(roundCrashCommand.TableId);
@@ -167,7 +156,7 @@ public sealed class RoundsService : BackgroundService
                 $"Could not mark round {roundId} as crashed because its fencing token or state is stale.");
         }
         // Database now confirms that this engine owns the crashed round.
-        await _bettingService.SettleCrashedRoundAsync(
+        await bettingService.SettleCrashedRoundAsync(
             table,
             roundId,
             ct);
@@ -181,7 +170,7 @@ public sealed class RoundsService : BackgroundService
     
     private async Task SendRoundCrashedCommand(CrashRoundCommand command, long tableId, CancellationToken ct)
     {
-        _logger.LogInformation("Sending Round Crashed {RoundId} for Table {TableId}", command.RoundId, tableId);
+        logger.LogInformation("Sending Round Crashed {RoundId} for Table {TableId}", command.RoundId, tableId);
 
         var message = new RoundCrashed
         {
@@ -193,24 +182,26 @@ public sealed class RoundsService : BackgroundService
             MessageId = Guid.NewGuid().ToString(),
         };
 
-        await _publisher.PublishAsync(message,ct);
+        await publisher.PublishAsync(message,ct);
     }
     private async Task ProcessAddPlayerToTableCommand(AddPlayerToTableCommand command, TableRuntimeState table,
         CancellationToken ct)
     {
-        using var scope = _scopeFactory.CreateScope();
+        using var scope = scopeFactory.CreateScope();
         var playerRepository = scope.ServiceProvider.GetRequiredService<IPlayerRepository>();
         var player = await playerRepository.GetById(long.Parse(command.PlayerId), ct);
         if (player is null)
         {
-            _logger.LogError("Player {PlayerId} does not exist", command.PlayerId);
+            logger.LogError("Player {PlayerId} does not exist", command.PlayerId);
             return;
         }
 
         table.AddPlayer(new PlayerRuntimeState
         {
             PlayerId = player.Id,
-            Balance = player.BalanceInUSD
+            Balance = player.BalanceInUSD,
+            ExternalId =  player.ExternalId,
+            
         });
         if (table.GetCurrentRoundSnapshot() is null)
         {
@@ -237,7 +228,7 @@ public sealed class RoundsService : BackgroundService
 
         if (command.TickSequence == 1)
         {
-            using var scope = _scopeFactory.CreateScope();
+            using var scope = scopeFactory.CreateScope();
             var repository = scope.ServiceProvider.GetRequiredService<IRoundRepository>();
             await repository.MarkRunningAsync(
                 long.Parse(command.RoundId),
@@ -251,7 +242,7 @@ public sealed class RoundsService : BackgroundService
 
     private async Task ProcessPlaceBetCommand(PlaceBetCommand command, TableRuntimeState table, CancellationToken ct)
     {
-        await _bettingService.PlaceBetAsync(command, table, ct);
+        await bettingService.PlaceBetAsync(command, table, ct);
     }
     
     
@@ -262,7 +253,7 @@ public sealed class RoundsService : BackgroundService
         if (round is null)
             return;
 
-        _logger.LogInformation("Sending Round {RoundId} for Table {TableId}", round.RoundId, table.TableId);
+        logger.LogInformation("Sending Round {RoundId} for Table {TableId}", round.RoundId, table.TableId);
 
         var message = new RoundCreated
         {
@@ -275,7 +266,7 @@ public sealed class RoundsService : BackgroundService
 
         };
 
-        await _publisher.PublishAsync(message,ct);
+        await publisher.PublishAsync(message,ct);
 
 
 
@@ -295,7 +286,7 @@ public sealed class RoundsService : BackgroundService
 
         };
 
-        await _publisher.PublishAsync(message,ct);
+        await publisher.PublishAsync(message,ct);
 
 
 
@@ -307,18 +298,18 @@ public sealed class RoundsService : BackgroundService
 
     private async Task<Round?> CreateAndPublishRound(long tableId,CancellationToken ct)
     {
-        using var scope = _scopeFactory.CreateScope();
+        using var scope = scopeFactory.CreateScope();
         var repo= scope.ServiceProvider.GetRequiredService<IRoundRepository>();
 
         
-      var fToken =  _options.Tables.TryGetValue(tableId, out var table );
+      var fToken =  options.Tables.TryGetValue(tableId, out var table );
 
       if (!fToken) return null;
       if(table is null)return null;    
 
      var round= await repo.CreateRoundAsync(tableId, table.FencingToken, ct);
 
-    var rngEntropy= await _rngClient.GenerateRoundEntropyAsync(new GenerateRoundEntropyRequest
+    var rngEntropy= await rngClient.GenerateRoundEntropyAsync(new GenerateRoundEntropyRequest
      {
          ClientSeed = "client-seed-todo",
          Nonce = round.Nonce,
@@ -343,7 +334,6 @@ public sealed class RoundsService : BackgroundService
         
     });
     var currentRound = table.GetCurrentRoundSnapshot();
-    _logger.LogInformation("Current Round is",currentRound);
 
     await SendNewRoundCreated(table, ct);
      return updatedRound;

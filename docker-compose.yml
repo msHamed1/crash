@@ -124,6 +124,12 @@ services:
       Fanout__ExchangeName: crash.fanout-messages
       Fanout__QueueName: crash.fanout
       Fanout__RoutingKey: ClientMessages
+      DbBroker__HostName: rabbitmq
+      DbBroker__Port: 5672
+      DbBroker__UserName: crash
+      DbBroker__Password: crash_password
+      DbBroker__ExchangeName: db.worker-messages
+      DbBroker__ExchangeResultName: db.worker-results
    
     ports:
       - "5002:8080"
@@ -177,6 +183,7 @@ services:
       DbBroker__UserName: crash
       DbBroker__Password: crash_password
       DbBroker__ExchangeName: db.worker-messages
+      DbBroker__ExchangeResultName: db.worker-results
     depends_on:
       mysql:
         condition: service_healthy

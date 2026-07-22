@@ -107,7 +107,7 @@ public class ClientMessagesConsumer(
             consumer: consumer);
         
         logger.LogInformation(
-            "DbWorker is consuming DbMessages messages for tables: DbWorkers."
+            "WssGateWay is consuming DbMessages messages for tables: WssGateWay."
         );
         WaitHandle.WaitAny([ct.WaitHandle]);
 

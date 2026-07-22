@@ -9,6 +9,8 @@ namespace Crash.Domain.State;
 /// </summary>
 public sealed class PlayerRuntimeState
 {
-    public required long PlayerId { get; init; }
+     public required long PlayerId { get; init; }
      public decimal Balance { get; set; }
+     public required string ExternalId { get; set; }
+
 }

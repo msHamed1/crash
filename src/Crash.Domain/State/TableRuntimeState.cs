@@ -87,7 +87,8 @@ public sealed class TableRuntimeState
             {
                 return null;
             }
-
+           // Reserve the runtime balance only after the duplicate-bet check succeeds.
+            player.Balance -= amount;
             var bet = new Bet
             {
                 PlayerId = player.PlayerId,
@@ -98,8 +99,17 @@ public sealed class TableRuntimeState
                 // The correlation ID is stable across retries and is protected by a unique DB index.
                 BetId = betId,
                 Currency = currency,
+                IsPersisted =  false,
                 Status = BetStatus.Placed,
-                CreatedAt = now
+                CreatedAt = now,
+                Player =
+                {
+                    BalanceInUSD = player.Balance,
+                    ExternalId = player.ExternalId,
+                    Id =  player.PlayerId,
+                    TableId =  TableId,
+                    
+                },
             };
 
             // TryAdd is the authoritative duplicate-bet check.
@@ -107,8 +117,7 @@ public sealed class TableRuntimeState
             if (!round.TryAddBet(bet))
                 return null;
 
-            // Reserve the runtime balance only after the duplicate-bet check succeeds.
-            player.Balance -= amount;
+            
             return bet;
         }
     }
@@ -282,6 +291,66 @@ public sealed class TableRuntimeState
         }
     }
 
+    public Bet? TryCancelBet(  long playerId, long roundId)
+    {
+        lock (_lock)
+        {
+            
+            if (_currentRound?.RoundId != roundId)
+            {
+                return null;
+            }
+            GetPlayer(playerId,player: out var player);
+            if (player is null)
+            {
+                
+                    return null;
+                 
+            }
+
+            var bet = GetPlayerBet(roundId, playerId);
+            if (bet is null)
+            {
+                return null;
+            }
+          var betIsCanceled=  RollbackBetInMemory(bet, player);
+            
+          return betIsCanceled ? null : bet;
+            
+
+        }
+    }
+    
+    public Bet? SetBetIsPersisted(  long playerId, long roundId)
+    {
+        lock (_lock)
+        {
+            
+            if (_currentRound?.RoundId != roundId)
+            {
+                return null;
+            }
+            GetPlayer(playerId,player: out var player);
+            if (player is null)
+            {
+                
+                return null;
+                 
+            }
+
+            var bet = GetPlayerBet(roundId, playerId);
+            if (bet is null)
+            {
+                return null;
+            }
+            bet.IsPersisted = true;
+            
+            return bet;
+            
+
+        }
+    }
+
     /// <summary>
     /// Advances the round from elapsed server time while holding the table lock.
     /// Delayed ticker iterations cannot slow down or alter the multiplier curve.
@@ -393,6 +462,41 @@ public sealed class TableRuntimeState
 
             _players.Remove(player);
             return true;
+        }
+    }
+    
+    
+    public IReadOnlyList<Bet> CancelUnpersistedBetsBeforeStart(long roundId)
+    {
+        lock (_lock)
+        {
+            if (_currentRound?.RoundId != roundId)
+                return [];
+
+            var now = DateTimeOffset.UtcNow;
+            var bettingClosesAt = _currentRound.StartsAt.AddSeconds(-1);
+
+            if (now < bettingClosesAt)
+                return [];
+
+            var cancelled = new List<Bet>();
+
+            foreach (var bet in _currentRound.GetBetsSnapshot()
+                         .Where(b => !b.IsPersisted && b.Status == BetStatus.Placed))
+            {
+                var player = _players.FirstOrDefault(p => p.PlayerId == bet.PlayerId);
+                if (player is null)
+                    continue;
+
+                if (_currentRound.TryRemoveBet(bet))
+                {
+                    player.Balance += bet.StakeAmount;
+                    bet.Status = BetStatus.Canceled;
+                    cancelled.Add(bet);
+                }
+            }
+
+            return cancelled;
         }
     }
 
