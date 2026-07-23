@@ -5,12 +5,13 @@ using Crash.Domain.Entities;
 using Crash.Domain.Options;
 using Crash.Domain.State;
 using GameEngine.Application.Commands.Bets;
+using GameEngine.Application.Results;
 using GameEngine.Messaging.Publishers;
 
 namespace GameEngine.Services;
 
 public sealed class BettingService(
-    IWssGatewayPublisher publisher,
+    IWssGatewayPublisher wssPublisher,
     ILogger<BettingService> logger,
     GameEngineOptions options,
     IDbWorkerPublisher dbWorkerPublisher)
@@ -22,6 +23,14 @@ public sealed class BettingService(
         TableRuntimeState table,
         CancellationToken ct)
     {
+        
+        // Validate memory-> reserve balance -> Placed
+        //    -> notify player with PlayerBetAccepted
+        //     -> persist asynchronously
+        //
+        // DB success -> Accepted -> return silently
+        // DB rejection -> rollback reservation -> PlayerBetRejected
+        
         if (!long.TryParse(command.PlayerId, out var playerId))
         {
             logger.LogWarning(
@@ -101,9 +110,19 @@ public sealed class BettingService(
             return;
         }
 
-     //   PlaceBetResult result;
         try
         {
+            // The runtime decision is authoritative for the live game. Notify the
+            // player as soon as the stake is reserved; the payload still exposes
+            // the bet as Placed until the DB worker confirms persistence.
+            await PublishAccepted(
+                command,
+                table.TableId,
+                playerId,
+                player.Balance,
+                bet,
+                ct);
+
             await dbWorkerPublisher.PublishAsync(new DbWorkerMessageEnvelope(MessageId : Guid.NewGuid(),
                     CreatedAt : DateTimeOffset.UtcNow,
                     Payload: new BetAcceptedForPersistence(AcceptedAt : DateTimeOffset.UtcNow,
@@ -123,7 +142,9 @@ public sealed class BettingService(
         }
         catch (Exception exception)
         {
-            // A failed DB transaction must release the balance reserved in runtime state.
+            // Publishing the player notification or the durable DB command failed.
+            // Release the runtime reservation and compensate any provisional
+            // acceptance that may already have reached the player.
             table.RollbackBetInMemory(bet, player);
             logger.LogError(exception,
                 "Failed to place bet {BetId} for player {PlayerId} in round {RoundId}.",
@@ -133,16 +154,8 @@ public sealed class BettingService(
             return;
         }
 
-        // if (!result.IsAccepted || result.Bet is null)
-        // {
-        //     table.RollbackBetInMemory(bet, player);
-        //     await PublishRejected(command.CorrelationId, table.TableId, playerId,
-        //         result.Code, result.Message, player.Balance, ct);
-        //     return;
-        // }
-
-        // The accepted notification is emitted from the DB-worker completion
-        // handler, after the transaction commits and memory is synchronized.
+        // DB-worker completion promotes Placed to Accepted. It does not emit a
+        // second player acceptance notification.
     }
 
     private Task PublishAccepted(
@@ -153,7 +166,7 @@ public sealed class BettingService(
         Bet bet,
         CancellationToken ct)
     {
-        return publisher.PublishAsync(new BetAccepted
+        return wssPublisher.PublishAsync(new BetAccepted
         {
             TableId = tableId,
             MessageId = command.CorrelationId,
@@ -175,7 +188,7 @@ public sealed class BettingService(
         decimal updatedBalance,
         CancellationToken ct)
     {
-        return publisher.PublishAsync(new BetRejected
+        return wssPublisher.PublishAsync(new BetRejected
         {
             TableId = tableId,
             MessageId =correlationId,
@@ -218,89 +231,331 @@ public sealed class BettingService(
             ct);
     }
 
-    public async Task<bool> ProcessBetPersistenceCompleted(
+    public async Task<DbResultHandlingOutcome> ProcessBetPersistenceCompleted(
         DbBetPersistenceCompletedCommand message,
         CancellationToken ct)
     {
-        if (!long.TryParse(message.TableId, out var tableId) ||
-            !options.Tables.TryGetValue(tableId, out var table))
+        if (!long.TryParse(message.TableId, out var tableId))
         {
-            return false;
+            return DbResultHandlingOutcome.Invalid(
+                $"TableId '{message.TableId}' is not a valid number.");
         }
 
         if (!long.TryParse(message.RoundId, out var messageRoundId))
         {
-            return false;
+            return DbResultHandlingOutcome.Invalid(
+                $"RoundId '{message.RoundId}' is not a valid number.");
+        }
+
+        if (!options.Tables.TryGetValue(tableId, out var table))
+        {
+            // Ownership/table registration can race with a result consumer.
+            // Allow a short bounded retry in the consumer, but never requeue forever.
+            return DbResultHandlingOutcome.Retryable(
+                $"Table {tableId} is not available in this engine.");
+        }
+
+        var isCommitted = message.Status is
+            DbWorkerResultStatus.Committed or
+            DbWorkerResultStatus.AlreadyProcessed;
+
+        if (isCommitted &&
+            message.ResultType == DbWorkerResultMessageType.BetSettled)
+        {
+            // The database is terminal even when this result arrived after the
+            // engine moved to another round.
+            _pendingSettlements.TryRemove(message.BetId, out _);
         }
 
         var round = table.GetCurrentRound();
-
         if (round is null || round.RoundId != messageRoundId)
         {
-            return false;
+            // A previous-round result must never overwrite the current runtime
+            // balance/state. MySQL already contains the authoritative outcome.
+            return DbResultHandlingOutcome.Stale(
+                $"Result round {messageRoundId} is no longer current for table {tableId}.");
         }
 
-        if (message.Status is not (DbWorkerResultStatus.Committed or DbWorkerResultStatus.AlreadyProcessed))
-            return false;
-
-        if (message.ResultType == DbWorkerResultMessageType.BetCancelled)
+        if (message.Status == DbWorkerResultStatus.Rejected)
         {
-            if (!table.GetPlayer(message.PlayerId, out var cancelledPlayer) || cancelledPlayer is null)
-                return false;
-
-            table.SetPlayerBalance(cancelledPlayer, message.UpdatedBalance);
-            await PublishRejected(message.BetId, table.TableId, message.PlayerId,
-                "BET_CANCELLED", "The bet was cancelled before the round started.",
-                message.UpdatedBalance, ct);
-            return true;
+            return await HandleRejectedBetAcceptanceAsync(
+                message,
+                table,
+                messageRoundId,
+                ct);
         }
 
-        var bet = round.GetBet(message.PlayerId);
+        if (!isCommitted)
+        {
+            return DbResultHandlingOutcome.Invalid(
+                $"Unsupported DB result status {message.Status}.");
+        }
+
+        return message.ResultType switch
+        {
+            DbWorkerResultMessageType.BetAccepted =>
+                HandleCommittedBetAcceptance(message, table, messageRoundId),
+
+            DbWorkerResultMessageType.BetCancelled =>
+                await HandleCommittedBetCancellationAsync(message, table, ct),
+
+            DbWorkerResultMessageType.BetSettled =>
+                await HandleCommittedBetSettlementAsync(
+                    message,
+                    table,
+                    messageRoundId,
+                    ct),
+
+            _ => DbResultHandlingOutcome.Invalid(
+                $"Unsupported DB result type {message.ResultType}.")
+        };
+    }
+
+    private async Task<DbResultHandlingOutcome> HandleRejectedBetAcceptanceAsync(
+        DbBetPersistenceCompletedCommand message,
+        TableRuntimeState table,
+        long roundId,
+        CancellationToken ct)
+    {
+        if (message.ResultType != DbWorkerResultMessageType.BetAccepted)
+        {
+            return DbResultHandlingOutcome.Invalid(
+                $"Rejected result type {message.ResultType} is not supported.");
+        }
+
+        logger.LogWarning(
+            "DB worker rejected bet {BetId} for player {PlayerId}. Code={ErrorCode}; Detail={ErrorMessage}.",
+            message.BetId,
+            message.PlayerId,
+            message.ErrorCode,
+            message.ErrorMessage);
+
+        if (!table.GetPlayer(message.PlayerId, out var player) || player is null)
+        {
+            return DbResultHandlingOutcome.Invalid(
+                $"Player {message.PlayerId} is unavailable for rejected bet {message.BetId}.");
+        }
+
+        var bet = table.GetPlayerBet(roundId, message.PlayerId);
         if (bet is null)
         {
-            // The ticker may already have removed and refunded an unconfirmed
-            // bet while this acceptance acknowledgement was in flight.
-            return message.ResultType == DbWorkerResultMessageType.BetAccepted;
+            // A prior delivery may have refunded the stake but failed while
+            // publishing the player notification.
+            await PublishRejected(
+                message.BetId,
+                table.TableId,
+                message.PlayerId,
+                message.ErrorCode ?? "BET_PERSISTENCE_REJECTED",
+                "The bet could not be accepted.",
+                player.Balance,
+                ct);
+
+            return DbResultHandlingOutcome.Handled(
+                $"Rejected bet {message.BetId} was already removed; notification was replayed.");
         }
 
-        if (message.ResultType == DbWorkerResultMessageType.BetAccepted)
+        if (!string.Equals(bet.BetId, message.BetId, StringComparison.Ordinal))
         {
-            if (bet.IsPersisted)
-                return true;
-
-            var persistedBet = table.SetBetIsPersisted(message.PlayerId, messageRoundId);
-            if (persistedBet is null || !table.GetPlayer(message.PlayerId, out var acceptedPlayer) || acceptedPlayer is null)
-                return false;
-
-            table.SetPlayerBalance(acceptedPlayer, message.UpdatedBalance);
-            persistedBet.Player.BalanceInUSD = message.UpdatedBalance;
-            await publisher.PublishAsync(new BetAccepted
-            {
-                TableId = table.TableId,
-                MessageId = persistedBet.BetId,
-                PlayerId = message.PlayerId,
-                UpdatedBalance = message.UpdatedBalance,
-                Bet = persistedBet
-            }, ct);
-            return true;
+            return DbResultHandlingOutcome.Invalid(
+                $"Rejected result bet {message.BetId} does not match runtime bet {bet.BetId}.");
         }
 
-        if (message.ResultType != DbWorkerResultMessageType.BetSettled ||
-            message.SettlementStatus is null || message.SettledAt is null)
-            return false;
+        if (bet.IsPersisted || bet.Status != BetStatus.Placed)
+        {
+            return DbResultHandlingOutcome.Invalid(
+                $"Rejected bet {message.BetId} is already in runtime state {bet.Status}.");
+        }
 
-        _pendingSettlements.TryRemove(message.BetId, out _);
+        if (!table.RollbackBetInMemory(bet, player))
+        {
+            var currentBet = table.GetPlayerBet(roundId, message.PlayerId);
+            if (currentBet is not null)
+            {
+                return DbResultHandlingOutcome.Retryable(
+                    $"Rejected bet {message.BetId} could not be removed from the current round.");
+            }
+        }
+
+        await PublishRejected(
+            message.BetId,
+            table.TableId,
+            message.PlayerId,
+            message.ErrorCode ?? "BET_PERSISTENCE_REJECTED",
+            "The bet could not be accepted.",
+            player.Balance,
+            ct);
+
+        return DbResultHandlingOutcome.Handled(
+            $"Rejected bet {message.BetId} was refunded and the player was notified.");
+    }
+
+    private static DbResultHandlingOutcome HandleCommittedBetAcceptance(
+        DbBetPersistenceCompletedCommand message,
+        TableRuntimeState table,
+        long roundId)
+    {
+        var bet = table.GetPlayerBet(roundId, message.PlayerId);
+        if (bet is null)
+        {
+            // The ticker may already have cancelled and refunded an unconfirmed
+            // bet while this acceptance result was in flight.
+            return DbResultHandlingOutcome.Handled(
+                $"Accepted bet {message.BetId} is no longer present in runtime memory.");
+        }
+
+        if (!string.Equals(bet.BetId, message.BetId, StringComparison.Ordinal))
+        {
+            return DbResultHandlingOutcome.Invalid(
+                $"Accepted result bet {message.BetId} does not match runtime bet {bet.BetId}.");
+        }
+
+        if (bet.IsPersisted && bet.Status == BetStatus.Accepted)
+        {
+            return DbResultHandlingOutcome.Handled(
+                $"Accepted bet {message.BetId} was already applied.");
+        }
+
+        if (bet.Status != BetStatus.Placed)
+        {
+            return DbResultHandlingOutcome.Invalid(
+                $"Accepted bet {message.BetId} is already in runtime state {bet.Status}.");
+        }
+
+        if (!table.GetPlayer(message.PlayerId, out var player) || player is null)
+        {
+            return DbResultHandlingOutcome.Invalid(
+                $"Player {message.PlayerId} is unavailable for accepted bet {message.BetId}.");
+        }
+
+        var persistedBet = table.SetBetIsPersisted(message.PlayerId, roundId);
+        if (persistedBet is null)
+        {
+            return DbResultHandlingOutcome.Retryable(
+                $"Accepted bet {message.BetId} changed while its result was being applied.");
+        }
+
+        table.SetPlayerBalance(player, message.UpdatedBalance);
+        persistedBet.Player.BalanceInUSD = message.UpdatedBalance;
+
+        return DbResultHandlingOutcome.Handled(
+            $"Accepted bet {message.BetId} was applied to runtime memory.");
+    }
+
+    private async Task<DbResultHandlingOutcome> HandleCommittedBetCancellationAsync(
+        DbBetPersistenceCompletedCommand message,
+        TableRuntimeState table,
+        CancellationToken ct)
+    {
+        if (!table.GetPlayer(message.PlayerId, out var player) || player is null)
+        {
+            return DbResultHandlingOutcome.Invalid(
+                $"Player {message.PlayerId} is unavailable for cancelled bet {message.BetId}.");
+        }
+
+        table.SetPlayerBalance(player, message.UpdatedBalance);
+        await PublishRejected(
+            message.BetId,
+            table.TableId,
+            message.PlayerId,
+            "BET_CANCELLED",
+            "The bet was cancelled before the round started.",
+            message.UpdatedBalance,
+            ct);
+
+        return DbResultHandlingOutcome.Handled(
+            $"Cancelled bet {message.BetId} balance and notification were applied.");
+    }
+
+    private async Task<DbResultHandlingOutcome> HandleCommittedBetSettlementAsync(
+        DbBetPersistenceCompletedCommand message,
+        TableRuntimeState table,
+        long roundId,
+        CancellationToken ct)
+    {
+        if (message.SettlementStatus is null || message.SettledAt is null)
+        {
+            return DbResultHandlingOutcome.Invalid(
+                $"Settled bet {message.BetId} is missing its status or settlement timestamp.");
+        }
+
+        var bet = table.GetPlayerBet(roundId, message.PlayerId);
+        if (bet is null)
+        {
+            return DbResultHandlingOutcome.Invalid(
+                $"Settled bet {message.BetId} is missing from the current runtime round.");
+        }
+
+        if (!string.Equals(bet.BetId, message.BetId, StringComparison.Ordinal))
+        {
+            return DbResultHandlingOutcome.Invalid(
+                $"Settled result bet {message.BetId} does not match runtime bet {bet.BetId}.");
+        }
 
         if (message.SettlementStatus == BetSettlementStatus.Lost)
         {
-            var currentBet = table.GetPlayerBet(messageRoundId, message.PlayerId);
-            return currentBet?.Status == BetStatus.Lost ||
-                   table.ApplyCommittedLoss(message.BetId, message.SettledAt.Value);
+            if (bet.Status == BetStatus.Lost)
+            {
+                return DbResultHandlingOutcome.Handled(
+                    $"Lost settlement for bet {message.BetId} was already applied.");
+            }
+
+            if (bet.Status == BetStatus.Placed)
+            {
+                return DbResultHandlingOutcome.Retryable(
+                    $"Lost settlement for bet {message.BetId} arrived before acceptance.");
+            }
+
+            if (bet.Status != BetStatus.Accepted)
+            {
+                return DbResultHandlingOutcome.Invalid(
+                    $"Lost settlement conflicts with runtime state {bet.Status} for bet {message.BetId}.");
+            }
+
+            if (table.ApplyCommittedLoss(message.BetId, message.SettledAt.Value))
+            {
+                return DbResultHandlingOutcome.Handled(
+                    $"Lost settlement for bet {message.BetId} was applied.");
+            }
+
+            var currentBet = table.GetPlayerBet(roundId, message.PlayerId);
+            return currentBet?.Status switch
+            {
+                BetStatus.Lost => DbResultHandlingOutcome.Handled(
+                    $"Lost settlement for bet {message.BetId} was applied concurrently."),
+                BetStatus.Placed => DbResultHandlingOutcome.Retryable(
+                    $"Lost settlement for bet {message.BetId} is waiting for acceptance."),
+                _ => DbResultHandlingOutcome.Invalid(
+                    $"Lost settlement for bet {message.BetId} could not be applied.")
+            };
         }
 
         if (message.SettlementStatus != BetSettlementStatus.CashedOut ||
             message.CashoutMultiplier is null)
-            return false;
+        {
+            return DbResultHandlingOutcome.Invalid(
+                $"Unsupported settlement status {message.SettlementStatus} for bet {message.BetId}.");
+        }
+
+        if (bet.Status == BetStatus.CashedOut)
+        {
+            // Re-publish with the stable cashout message ID. This repairs a
+            // previous delivery that updated memory but failed at notification.
+            await PublishCashoutAsync(message, table.TableId, ct);
+            return DbResultHandlingOutcome.Handled(
+                $"Cashout settlement for bet {message.BetId} was already applied; notification was replayed.");
+        }
+
+        if (bet.Status == BetStatus.Placed)
+        {
+            return DbResultHandlingOutcome.Retryable(
+                $"Cashout settlement for bet {message.BetId} arrived before acceptance.");
+        }
+
+        if (bet.Status != BetStatus.Accepted)
+        {
+            return DbResultHandlingOutcome.Invalid(
+                $"Cashout settlement conflicts with runtime state {bet.Status} for bet {message.BetId}.");
+        }
 
         var applied = table.ApplyCommittedCashout(
             message.BetId,
@@ -310,11 +565,27 @@ public sealed class BettingService(
             message.SettledAt.Value);
 
         if (!applied)
-            return table.GetPlayerBet(messageRoundId, message.PlayerId)?.Status == BetStatus.CashedOut;
+        {
+            var currentBet = table.GetPlayerBet(roundId, message.PlayerId);
+            if (currentBet?.Status == BetStatus.CashedOut)
+            {
+                await PublishCashoutAsync(message, table.TableId, ct);
+                return DbResultHandlingOutcome.Handled(
+                    $"Cashout settlement for bet {message.BetId} was applied concurrently.");
+            }
+
+            return currentBet?.Status == BetStatus.Placed
+                ? DbResultHandlingOutcome.Retryable(
+                    $"Cashout settlement for bet {message.BetId} is waiting for acceptance.")
+                : DbResultHandlingOutcome.Invalid(
+                    $"Cashout settlement for bet {message.BetId} could not be applied.");
+        }
 
         await PublishCashoutAsync(message, table.TableId, ct);
-        return true;
+        return DbResultHandlingOutcome.Handled(
+            $"Cashout settlement for bet {message.BetId} was applied and published.");
     }
+
     public async Task ProcessAutoCashoutsAsync(
         TableRuntimeState table,
         long roundId,
@@ -347,7 +618,7 @@ public sealed class BettingService(
         CancellationToken ct)
     {
         // A stable message ID lets the gateway/client deduplicate a retried settlement event.
-        return publisher.PublishAsync(new BetCashedOut
+        return wssPublisher.PublishAsync(new BetCashedOut
         {
             TableId = tableId,
             MessageId = $"cashout:{result.BetId}",

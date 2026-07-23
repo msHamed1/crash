@@ -137,6 +137,11 @@ public class DbMessageConsumer(
                     "Invalid DB event {MessageId}. Sending to dead-letter queue.",
                     message?.MessageId);
 
+                PublishRejectedBetResult(
+                    channel,
+                    message,
+                    "INVALID_BET_PERSISTENCE_MESSAGE",
+                    exception.Message);
                 SafeReject(channel, ea.DeliveryTag);
             }
             catch (PermanentDbMessageException exception)
@@ -146,6 +151,11 @@ public class DbMessageConsumer(
                     "DB event {MessageId} requires investigation.",
                     message?.MessageId);
 
+                PublishRejectedBetResult(
+                    channel,
+                    message,
+                    "BET_PERSISTENCE_REJECTED",
+                    exception.Message);
                 SafeReject(channel, ea.DeliveryTag);
             }
             catch (Exception exception)
@@ -390,6 +400,57 @@ private void PublishResult(
         channel.BasicPublish(
             exchange: options.ExchangeResultName,
             routingKey: $"table.{message.Payload.TableId}",
+            basicProperties: properties,
+            body: body);
+    }
+}
+
+private void PublishRejectedBetResult(
+    IModel channel,
+    DbWorkerMessageEnvelope? message,
+    string errorCode,
+    string errorMessage)
+{
+    if (message is not
+        {
+            Type: DbWorkerMessageType.BetAccepted,
+            Payload: BetAcceptedForPersistence accepted
+        })
+    {
+        return;
+    }
+
+    var result = new BetPersistenceResult(
+        MessageId: Guid.NewGuid(),
+        CausationMessageId: message.MessageId,
+        BetId: accepted.BetId,
+        PlayerId: accepted.PlayerId,
+        TableId: accepted.TableId,
+        RoundId: accepted.RoundId,
+        Sequence: accepted.Sequence,
+        Type: DbWorkerResultMessageType.BetAccepted,
+        Status: DbWorkerResultStatus.Rejected,
+        SettlementStatus: null,
+        UpdatedBalance: 0,
+        PayoutAmount: 0,
+        ProfitLoss: 0,
+        CashoutMultiplier: null,
+        SettledAt: null,
+        ErrorCode: errorCode,
+        ErrorMessage: errorMessage,
+        CompletedAt: DateTimeOffset.UtcNow);
+
+    var body = JsonSerializer.SerializeToUtf8Bytes(result, JsonOptions);
+    var properties = channel.CreateBasicProperties();
+    properties.Persistent = true;
+    properties.ContentType = "application/json";
+    properties.MessageId = result.MessageId.ToString();
+
+    lock (_channelLock)
+    {
+        channel.BasicPublish(
+            exchange: options.ExchangeResultName,
+            routingKey: $"table.{accepted.TableId}",
             basicProperties: properties,
             body: body);
     }

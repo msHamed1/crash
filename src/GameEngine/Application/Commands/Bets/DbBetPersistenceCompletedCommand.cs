@@ -15,6 +15,7 @@ public record DbBetPersistenceCompletedCommand: GameCommand
     public decimal? CashoutMultiplier { get; init; }
     public DateTimeOffset? SettledAt { get; init; }
     public string? ErrorCode { get; init; }
+    public string? ErrorMessage { get; init; }
     public long PlayerId { get; init; }
 
     public override string MessageType  => "BetPersistenceCompleted";

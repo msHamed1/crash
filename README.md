@@ -89,7 +89,7 @@ The current persistence model is hybrid:
 | `DbWorkers` | Idempotent financial persistence for accepted, cancelled, and settled bets. |
 | `RngService` | Idempotent provably-fair entropy and crash-point generation over gRPC. |
 | `client.html` | Lightweight local browser client for login, round events, betting, and cash-out. |
-| `load-tests/signalr` | End-to-end SignalR connection and bet-acceptance latency test. |
+| `load-tests/signalr` | Scenario-based realtime load tests for connection, placement, rejection, duplicate replay, cashout, crash, reconnect, and financial-contract invariants. |
 
 ## Architecture invariants
 
@@ -129,6 +129,15 @@ The current persistence model is hybrid:
   not proof of database persistence.
 - DB-worker input is ACKed only after commit/idempotent duplicate handling and
   after the result publish call returns.
+- The engine result consumer uses prefetch 25 and explicit handling outcomes:
+  handled, stale, invalid, or retryable. Retryable results use bounded
+  exponential backoff and are acknowledged after five unsuccessful retries
+  with a critical audit log instead of entering an infinite hot-requeue loop.
+- A committed result from an older round is acknowledged as stale and is never
+  allowed to overwrite the current round's runtime state or player balance.
+- A permanent accepted-bet persistence conflict publishes a correlated
+  `Rejected` result before the original DB command is dead-lettered for
+  investigation.
 - RabbitMQ uses at-least-once delivery in several paths, so consumers must
   tolerate redelivery. SignalR notification delivery is currently live and
   best-effort; reconnect replay still needs to be implemented.
@@ -393,16 +402,25 @@ sequenceDiagram
     Engine-->>Rabbit: ACK after successful enqueue
     Engine->>Memory: validate and reserve stake
     Memory-->>Engine: Bet status = Placed
+    Engine->>Gateway: PlayerBetAccepted (Placed)
+    Gateway->>Client: private player group
     Engine->>Rabbit: BetAcceptedForPersistence
     Rabbit->>Worker: db.events
     Worker->>DB: lock round/player, debit, insert bet + inbox
-    DB-->>Worker: commit with updated balance
-    Worker->>Rabbit: BetPersistenceResult
-    Worker-->>Rabbit: ACK DB input
-    Rabbit->>Engine: table DB result
-    Engine->>Memory: status = Accepted, copy committed balance
-    Engine->>Gateway: PlayerBetAccepted
-    Gateway->>Client: private player group
+    alt DB commit succeeds
+        DB-->>Worker: commit with updated balance
+        Worker->>Rabbit: committed BetPersistenceResult
+        Rabbit->>Engine: table DB result
+        Engine->>Memory: status = Accepted, copy committed balance
+    else DB permanently rejects
+        DB-->>Worker: rollback
+        Worker->>Rabbit: rejected BetPersistenceResult
+        Rabbit->>Engine: table DB result
+        Engine->>Memory: remove bet and refund reservation
+        Engine->>Gateway: PlayerBetRejected
+        Gateway->>Client: private player group
+    end
+    Worker-->>Rabbit: ACK or dead-letter DB input
 ```
 
 **Current approach**
@@ -416,20 +434,33 @@ sequenceDiagram
 5. `BettingService` validates USD, current round, table presence, betting
    deadline, minimum stake, duplicate player bet, and runtime balance.
 6. The stake is reserved in memory and the bet becomes `Placed`.
-7. A `BetAccepted` DB-worker message is published with the table fencing token.
-8. The worker locks the bet/player rows, validates the persisted round fence,
+7. The engine immediately publishes `PlayerBetAccepted` privately with the
+   reserved balance and the bet still identified as `Placed`.
+8. A `BetAccepted` DB-worker message is published with the table fencing token.
+9. The worker locks the bet/player rows, validates the persisted round fence,
    debits the DB balance, inserts the bet, records the inbox message, and commits
    atomically.
-9. The worker publishes a table-routed result.
-10. The engine changes the runtime bet to `Accepted`, copies the committed DB
-    balance, and publishes `PlayerBetAccepted` privately.
-11. Validation failures publish `PlayerBetRejected` privately.
+10. On success, the worker publishes a committed table-routed result. The
+    engine changes the runtime bet to `Accepted`, copies the committed DB
+    balance, and returns without publishing a second acceptance.
+11. On a permanent DB rejection, the worker rolls back, publishes a rejected
+    result, and retains the original command in the investigation queue.
+12. The engine removes the provisional bet, refunds the reserved runtime stake,
+    and publishes `PlayerBetRejected` privately.
+13. Initial memory-validation or broker-publication failures also publish
+    `PlayerBetRejected` privately.
 
 **Architecture notes**
 
 - There are deliberately two acceptance stages: engine reservation (`Placed`)
   and committed financial acceptance (`Accepted`).
-- The client receives acceptance only after the DB result on the normal path.
+- The client is notified at the memory-reservation stage. `Bet.Status=Placed`
+  means persistence is still pending even though the live engine accepted the
+  request.
+- A committed DB result is an internal state transition and does not produce a
+  second acceptance notification.
+- A permanent DB failure compensates the provisional acceptance with a
+  correlated rejection and runtime refund.
 - One bet per player per round is enforced by the in-memory dictionary.
 - `BetId` is unique in MySQL; DB-worker `MessageId` is separately unique in the
   inbox.
@@ -441,8 +472,9 @@ sequenceDiagram
   durability.
 - Make the lifecycle channel bounded and define explicit backpressure/rejection
   behavior before ACKing the player command.
-- Make duplicate-correlation handling commit-aware. The current in-memory
-  duplicate fast path can publish acceptance before the original DB result.
+- Reject a reused correlation ID when immutable request fields differ from the
+  original provisional bet; matching retries should replay the same
+  in-memory decision without reserving or persisting twice.
 - Return a deterministic rejection for malformed player IDs and all unsupported
   states instead of logging/silently returning.
 - Validate maximum stake, decimal precision, currency-specific limits,
@@ -569,9 +601,9 @@ sequenceDiagram
 - Do not block the single lifecycle reader for every table during the
   five-second inter-round delay.
 - Keep previous-round settlement state until every result is terminal. The
-  current result handler requires the result round to still be the table's
-  current round and can requeue a late result indefinitely after the next round
-  replaces it.
+  current result handler safely ACKs a late result as stale because MySQL is
+  already authoritative, but it cannot reconstruct the previous runtime round
+  or replay a missed player notification.
 - Transition rounds through `Settling` and `Settled` after all accepted bets
   reach terminal state.
 - Publish a private lost-bet settlement event with final P/L and balance.
@@ -596,6 +628,12 @@ sequenceDiagram
 9. Invalid JSON/type pairs and permanent financial/ownership conflicts are
    rejected to `db.events.investigation`.
 10. Other failures are NACKed and requeued as transient.
+11. The engine result consumer limits in-flight deliveries to 25 and maps each
+    result to `Handled`, `Stale`, `Invalid`, or `Retryable`.
+12. Handled, stale, and invalid results are ACKed. Retryable ordering/state
+    races use exponential backoff for at most five redeliveries; exhaustion is
+    logged at critical severity and ACKed so one result cannot saturate the
+    engine, RabbitMQ, and database logger.
 
 **Architecture notes**
 
@@ -607,6 +645,9 @@ sequenceDiagram
   indicates an ordering or recovery fault that needs an alert.
 - The result contains a new `MessageId` plus the original
   `CausationMessageId`.
+- A stale committed result remains valid in MySQL. The engine intentionally
+  avoids applying its balance to a newer round, because that could overwrite
+  later committed financial activity.
 
 **Next / TODO**
 
@@ -616,8 +657,12 @@ sequenceDiagram
 - Provision each table result queue before accepting DB work, and publish
   results as mandatory. Today the engine declares the result queue dynamically,
   so an early result can be unroutable before that binding exists.
-- Add retry count, exponential backoff, delayed queues, and a maximum retry
-  policy; plain requeue can create a hot poison-message loop.
+- Replace the result consumer's process-local retry counter and the worker
+  input's plain requeue with broker-visible delivery counts, delayed queues,
+  jitter, and operational retry metrics.
+- Add a durable result-investigation queue before changing exhausted/invalid
+  result handling from critical-log-and-ACK to dead-lettering. Do not add queue
+  arguments ad hoc to an already-declared production queue.
 - Classify stale fencing-token events separately from corrupt financial events
   and retain a searchable audit record.
 - Guarantee per-bet event ordering when several worker replicas process
@@ -686,25 +731,35 @@ sequenceDiagram
 
 **Current approach**
 
-1. The Node.js test creates players through the real login endpoint.
-2. It opens authenticated SignalR connections with configurable concurrency.
-3. Every player submits one bet for each future `NewRoundInfo`.
-4. Latency starts immediately before `connection.invoke("Bet", ...)`.
-5. It ends at the matching private `PlayerBetAccepted` or
-   `PlayerBetRejected`, keyed by correlation/message ID.
-6. Reports include connection counts, table distribution, timeouts, rejection
-   codes, and acceptance average/p50/p95/p99/max.
+1. The comprehensive Node.js runner creates players through the real login
+   endpoint and opens authenticated SignalR connections with bounded
+   concurrency.
+2. Players are deterministically assigned to auto-cashout, manual-cashout,
+   expected-loss, expected-rejection, and duplicate-correlation scenarios.
+3. The runner validates `NewRoundInfo`, tick ordering/multiplier monotonicity,
+   public crashes, provisional `PlayerBetAccepted`, compensating
+   `PlayerBetRejected`, and committed `BetCashedOut`.
+4. It checks reservation, refund, payout, profit/loss, and updated-balance
+   arithmetic using the player-visible values.
+5. Optional controlled reconnects verify that reconnect snapshots do not place a
+   duplicate round bet.
+6. Runs are duration/round bounded, drain pending work before exit, optionally
+   write JSON, and can fail CI on timeouts, contract violations, invariant
+   failures, response-rate thresholds, or p95 latency thresholds.
+7. Provisional acceptance latency still measures the in-memory decision and
+   client notification path, not the silent DB-acceptance commit.
 
 See [load-tests/signalr/README.md](load-tests/signalr/README.md).
 
 **Next / TODO**
 
-- Add manual/auto cash-out latency and correctness scenarios.
-- Add reconnect, ownership-transfer, RabbitMQ restart, DB slowdown, and duplicate
-  delivery tests.
-- Assert financial invariants after each run: balance conservation, one terminal
-  outcome per accepted bet, and no unsettled completed rounds.
-- Export machine-readable results for regression comparison.
+- Add an authenticated read-only test snapshot or a separate DB reconciliation
+  job. Successful DB acceptance and committed loss settlement are currently
+  silent, so SignalR alone cannot prove their latency or final row state.
+- Add orchestrated ownership-transfer, RabbitMQ restart, DB slowdown, and worker
+  termination fault-injection profiles.
+- Export the JSON report to the deployment metrics system and retain baselines
+  per commit/environment.
 
 ## Message and queue catalogue
 
@@ -748,8 +803,8 @@ messages are disposable.
 | `NewRoundInfo` | Table | Produced and delivered |
 | `RoundTick` | Table | Produced and delivered |
 | `RoundCrashed` | Table | Produced and delivered |
-| `PlayerBetAccepted` | Player | Produced after DB acceptance |
-| `PlayerBetRejected` | Player | Produced for bet rejection/cancellation |
+| `PlayerBetAccepted` | Player | Produced after the in-memory reservation; payload bet remains `Placed` until DB confirmation |
+| `PlayerBetRejected` | Player | Produced for memory rejection, DB rejection, or cancellation |
 | `BetCashedOut` | Player | Produced after DB settlement |
 | `CurrentState` | Player | Contract and gateway delivery exist; engine production is not wired |
 

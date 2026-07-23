@@ -4,6 +4,7 @@ public enum DbWorkerResultStatus
 {
     Committed,
     AlreadyProcessed,
+    Rejected,
     InvestigationRequired
 }
 

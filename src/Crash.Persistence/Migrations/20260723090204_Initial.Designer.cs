@@ -12,7 +12,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Crash.Persistence.Migrations
 {
     [DbContext(typeof(DataContext))]
-    [Migration("20260715113612_Initial")]
+    [Migration("20260723090204_Initial")]
     partial class Initial
     {
         /// <inheritdoc />
@@ -93,8 +93,14 @@ namespace Crash.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("longtext");
 
+                    b.Property<bool>("IsPersisted")
+                        .HasColumnType("tinyint(1)");
+
                     b.Property<decimal>("PayoutAmount")
                         .HasColumnType("decimal(65,30)");
+
+                    b.Property<long>("PersistenceSequence")
+                        .HasColumnType("bigint");
 
                     b.Property<decimal>("Pl")
                         .HasColumnType("decimal(65,30)");
@@ -269,6 +275,35 @@ namespace Crash.Persistence.Migrations
                     b.HasIndex("OwnerId");
 
                     b.ToTable("Tables");
+                });
+
+            modelBuilder.Entity("Crash.Persistence.ProcessedDbMessage", b =>
+                {
+                    b.Property<Guid>("MessageId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("MessageType")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<DateTimeOffset>("ProcessedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<long>("RoundId")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("Sequence")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("TableId")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("MessageId");
+
+                    b.HasIndex("TableId", "RoundId", "Sequence");
+
+                    b.ToTable("ProcessedDbMessages");
                 });
 
             modelBuilder.Entity("Crash.Domain.Entities.Bet", b =>

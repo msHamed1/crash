@@ -1,26 +1,29 @@
-using GameEngine.Application.Commands.Bets;
-using GameEngine.Services;
-
-namespace GameEngine.Messaging.Consumers;
-
- 
-
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Crash.Contracts.Messaging.DbWorkers;
 using Crash.Domain.Options;
+using GameEngine.Application.Commands.Bets;
+using GameEngine.Application.Results;
+using GameEngine.Services;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
- 
+
+namespace GameEngine.Messaging.Consumers;
+
 public class DbWorkerConsumer(
     DbBrokerOptions options,
     GameEngineOptions gameEngineOptions,
-    ILogger<DbWorkerMessageConsumer> logger,
+    ILogger<DbWorkerConsumer> logger,
     BettingService  bettingService
 
     ): BackgroundService
 {
+    private const ushort ResultPrefetchCount = 25;
+    private const int MaxRetryAttempts = 5;
+
+    private readonly ConcurrentDictionary<Guid, int> _retryAttempts = new();
     
     private static readonly JsonSerializerOptions JsonOptions =
         new(JsonSerializerDefaults.Web)
@@ -40,6 +43,46 @@ public class DbWorkerConsumer(
             if (channel.IsOpen)
                 channel.BasicAck(deliveryTag, multiple: false);
         }
+    }
+
+    private async Task RetryOrAcknowledgeAsync(
+        IModel channel,
+        ulong deliveryTag,
+        Guid messageId,
+        string reason,
+        CancellationToken ct)
+    {
+        var attempt = _retryAttempts.AddOrUpdate(
+            messageId,
+            1,
+            static (_, current) => current + 1);
+
+        if (attempt > MaxRetryAttempts)
+        {
+            _retryAttempts.TryRemove(messageId, out _);
+            logger.LogCritical(
+                "Acknowledging DB result {MessageId} after {RetryCount} retries. " +
+                "The committed DB state remains authoritative. Reason: {Reason}",
+                messageId,
+                MaxRetryAttempts,
+                reason);
+            SafeAck(channel, deliveryTag);
+            return;
+        }
+
+        var delay = TimeSpan.FromMilliseconds(
+            Math.Min(2_000, 100 * Math.Pow(2, attempt - 1)));
+
+        logger.LogWarning(
+            "Retrying DB result {MessageId} in {DelayMs} ms. Attempt {Attempt}/{MaxAttempts}. Reason: {Reason}",
+            messageId,
+            delay.TotalMilliseconds,
+            attempt,
+            MaxRetryAttempts,
+            reason);
+
+        await Task.Delay(delay, ct);
+        SafeNack(channel, deliveryTag, requeue: true);
     }
 
 
@@ -140,6 +183,11 @@ private async Task ConsumerAsync(CancellationToken ct)
     using var channel = connection.CreateModel();
     
     ConfigureTopology(channel);
+    channel.BasicQos(
+        prefetchSize: 0,
+        prefetchCount: ResultPrefetchCount,
+        global: false);
+
     var consumer = new AsyncEventingBasicConsumer(channel);
     consumer.Received += async (model, ea) =>
     {
@@ -149,7 +197,7 @@ private async Task ConsumerAsync(CancellationToken ct)
         {
             message = Deserialize(ea.Body);
             
-            logger.LogInformation(
+            logger.LogDebug(
                 "Processing DB Response {MessageId}, type {Type}, " +
                 "Status {Status}, PlayerId {PlayerId}, RoundId {RoundId}.",
                 message.MessageId,
@@ -175,29 +223,82 @@ private async Task ConsumerAsync(CancellationToken ct)
                 CashoutMultiplier = message.CashoutMultiplier,
                 SettledAt = message.SettledAt,
                 ErrorCode =  message.ErrorCode,
+                ErrorMessage = message.ErrorMessage,
             };
             
              
             
-            var valid= await bettingService.ProcessBetPersistenceCompleted(command, ct);
+            var outcome = await bettingService.ProcessBetPersistenceCompleted(command, ct);
 
-            if (valid)
+            switch (outcome.Disposition)
             {
-                SafeAck(channel, ea.DeliveryTag);
+                case DbResultHandlingDisposition.Retryable:
+                    await RetryOrAcknowledgeAsync(
+                        channel,
+                        ea.DeliveryTag,
+                        message.MessageId,
+                        outcome.Reason,
+                        ct);
+                    break;
 
-            }
-            else
-            {
-                SafeNack(channel, ea.DeliveryTag, true);
-  
+                case DbResultHandlingDisposition.Invalid:
+                    _retryAttempts.TryRemove(message.MessageId, out _);
+                    logger.LogError(
+                        "Acknowledging invalid DB result {MessageId}. Reason: {Reason}",
+                        message.MessageId,
+                        outcome.Reason);
+                    SafeAck(channel, ea.DeliveryTag);
+                    break;
+
+                case DbResultHandlingDisposition.Stale:
+                    _retryAttempts.TryRemove(message.MessageId, out _);
+                    logger.LogDebug(
+                        "Acknowledging stale DB result {MessageId}. Reason: {Reason}",
+                        message.MessageId,
+                        outcome.Reason);
+                    SafeAck(channel, ea.DeliveryTag);
+                    break;
+
+                default:
+                    _retryAttempts.TryRemove(message.MessageId, out _);
+                    SafeAck(channel, ea.DeliveryTag);
+                    break;
             }
 
         }
-        catch (Exception e)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-          logger.LogError(e,e.Message);            
-            SafeNack(channel, ea.DeliveryTag, true);
-            
+            // Closing the channel returns this unacknowledged result to RabbitMQ.
+        }
+        catch (JsonException exception)
+        {
+            logger.LogError(
+                exception,
+                "Acknowledging malformed DB result because redelivery cannot repair its JSON.");
+            SafeAck(channel, ea.DeliveryTag);
+        }
+        catch (Exception exception)
+        {
+            if (message is null)
+            {
+                logger.LogError(
+                    exception,
+                    "Acknowledging unreadable DB result because it has no usable message identity.");
+                SafeAck(channel, ea.DeliveryTag);
+                return;
+            }
+
+            logger.LogError(
+                exception,
+                "Unexpected failure while processing DB result {MessageId}.",
+                message.MessageId);
+
+            await RetryOrAcknowledgeAsync(
+                channel,
+                ea.DeliveryTag,
+                message.MessageId,
+                exception.Message,
+                ct);
         }
     };
 

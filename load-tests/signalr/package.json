@@ -2,8 +2,13 @@
   "name": "crash-signalr-load-test",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
-    "start": "node load-test.js"
+    "start": "node comprehensive-load-test.js",
+    "start:basic": "node load-test.js",
+    "check": "node --check comprehensive-load-test.js && node --check load-test.js"
   },
   "dependencies": {
     "@microsoft/signalr": "8.0.7"

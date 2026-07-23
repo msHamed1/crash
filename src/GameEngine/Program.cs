@@ -54,7 +54,6 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<RoundsService>());
 // Logs 
 builder.Services.AddSingleton<DatabaseLogQueue>();
 builder.Services.AddHostedService<DataBaseLogWriter>();
-builder.Services.AddHostedService<DataBaseLogWriter>();
 
 builder.Services.AddSingleton<ILoggerProvider, DatabaseLoggerProvider>();
 

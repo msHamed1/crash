@@ -168,6 +168,7 @@ private async Task ConsumerAsync(CancellationToken ct)
                 CashoutMultiplier = message.CashoutMultiplier,
                 SettledAt = message.SettledAt,
                 ErrorCode =  message.ErrorCode,
+                ErrorMessage = message.ErrorMessage,
             };
             
             await roundsService.EnqueueAsync(command, ct);

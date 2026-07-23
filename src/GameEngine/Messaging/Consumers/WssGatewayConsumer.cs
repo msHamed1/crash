@@ -263,8 +263,7 @@ public sealed class WssGatewayConsumer(
                 var message = JsonSerializer.Deserialize<PlaceBetRequested>(json, JsonOptions)
                               ?? throw new InvalidOperationException("Invalid place-bet message.");
 
-              //  await _gameEngine.PlaceBetAsync(message, ct);
-              
+               
               logger.LogInformation("Player {PlayerId} place bet",message.Data.PlayerId);
               var command = new PlaceBetCommand
               {

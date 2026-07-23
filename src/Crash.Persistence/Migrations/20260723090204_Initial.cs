@@ -55,6 +55,24 @@ namespace Crash.Persistence.Migrations
                 .Annotation("MySql:CharSet", "utf8mb4");
 
             migrationBuilder.CreateTable(
+                name: "ProcessedDbMessages",
+                columns: table => new
+                {
+                    MessageId = table.Column<Guid>(type: "char(36)", nullable: false, collation: "ascii_general_ci"),
+                    MessageType = table.Column<string>(type: "varchar(100)", maxLength: 100, nullable: false)
+                        .Annotation("MySql:CharSet", "utf8mb4"),
+                    TableId = table.Column<long>(type: "bigint", nullable: false),
+                    RoundId = table.Column<long>(type: "bigint", nullable: false),
+                    Sequence = table.Column<long>(type: "bigint", nullable: false),
+                    ProcessedAt = table.Column<DateTimeOffset>(type: "datetime(6)", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_ProcessedDbMessages", x => x.MessageId);
+                })
+                .Annotation("MySql:CharSet", "utf8mb4");
+
+            migrationBuilder.CreateTable(
                 name: "Tables",
                 columns: table => new
                 {
@@ -163,6 +181,8 @@ namespace Crash.Persistence.Migrations
                     Pl = table.Column<decimal>(type: "decimal(65,30)", nullable: false),
                     Status = table.Column<string>(type: "longtext", nullable: false)
                         .Annotation("MySql:CharSet", "utf8mb4"),
+                    PersistenceSequence = table.Column<long>(type: "bigint", nullable: false),
+                    IsPersisted = table.Column<bool>(type: "tinyint(1)", nullable: false),
                     CreatedAt = table.Column<DateTimeOffset>(type: "datetime(6)", nullable: false),
                     AcceptedAt = table.Column<DateTimeOffset>(type: "datetime(6)", nullable: true),
                     CashedOutAt = table.Column<DateTimeOffset>(type: "datetime(6)", nullable: true),
@@ -213,6 +233,11 @@ namespace Crash.Persistence.Migrations
                 column: "TableId");
 
             migrationBuilder.CreateIndex(
+                name: "IX_ProcessedDbMessages_TableId_RoundId_Sequence",
+                table: "ProcessedDbMessages",
+                columns: new[] { "TableId", "RoundId", "Sequence" });
+
+            migrationBuilder.CreateIndex(
                 name: "IX_Rounds_TableId",
                 table: "Rounds",
                 column: "TableId");
@@ -231,6 +256,9 @@ namespace Crash.Persistence.Migrations
 
             migrationBuilder.DropTable(
                 name: "Bets");
+
+            migrationBuilder.DropTable(
+                name: "ProcessedDbMessages");
 
             migrationBuilder.DropTable(
                 name: "Players");

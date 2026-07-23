@@ -49,7 +49,7 @@ public class AuthController: ControllerBase
         
         // Find the available Table and add the user to that Table.
         var tableContext = scope.ServiceProvider.GetRequiredService<ITableRepository>();
-       var table= await tableContext.GetOrCreateTableForPlayer(player, ct);
+        var table= await tableContext.GetOrCreateTableForPlayer(player, ct);
 
         var token = GenerateJwt(player,table);
          var hubUrl = $"{Request.Scheme}://{Request.Host}/hubs/player";

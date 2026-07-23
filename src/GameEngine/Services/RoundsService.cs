@@ -16,15 +16,37 @@
 
  namespace GameEngine.Services;
 
-public sealed class RoundsService(
-    ILogger<RoundsService> logger,
-    GameEngineOptions options,
-    IServiceScopeFactory scopeFactory,
-    Rng.RngClient rngClient,
-    IWssGatewayPublisher publisher,
-    BettingService bettingService)
+public sealed class RoundsService 
     : BackgroundService
 {
+    private readonly ILogger<RoundsService> logger;
+    private readonly GameEngineOptions options;
+    private readonly IServiceScopeFactory scopeFactory;
+    private readonly Rng.RngClient rngClient;
+    private readonly IWssGatewayPublisher publisher;
+    private readonly BettingService bettingService;
+
+    public RoundsService(
+        ILogger<RoundsService> logger,
+        GameEngineOptions options,
+        IServiceScopeFactory scopeFactory,
+        Rng.RngClient rngClient,
+        IWssGatewayPublisher publisher,
+        BettingService bettingService)
+    {
+        this.logger = logger;
+        this.options = options;
+        this.scopeFactory = scopeFactory;
+        this.rngClient = rngClient;
+        this.publisher = publisher;
+        this.bettingService = bettingService;
+    }
+
+    private async Task SettleLatestRound()
+    {
+        // TODO settle old rounds when the engine starts
+
+    }
     private readonly Channel<GameCommand> _lifecycleChannel = Channel.CreateUnbounded<GameCommand>(new UnboundedChannelOptions
     {
         SingleReader = true,
@@ -121,7 +143,7 @@ public sealed class RoundsService(
                         ct);
                     break;
                 case ProcessAutoCashoutsCommand autoCashoutsCommand:
-                    await bettingService.ProcessAutoCashoutsAsync(
+                    await  bettingService.ProcessAutoCashoutsAsync(
                         table,
                         long.Parse(autoCashoutsCommand.RoundId),
                         autoCashoutsCommand.CurrentMultiplier,
@@ -168,7 +190,6 @@ public sealed class RoundsService(
         await SendRoundCrashedCommand(roundCrashCommand, tableId, ct);
         // A new round may only be created after the previous crash is fenced, persisted,
         // and published. Otherwise a failed crash transition can be silently skipped.
-        await Task.Delay(5000,ct);// Add Delay of 5 sec. 
         await EnqueueAsync(new CreateRoundCommand { TableId = tableId.ToString() }, ct);
     }
     
@@ -326,7 +347,6 @@ public sealed class RoundsService(
          //  sleep try again .
          return null;
      };
-     Console.WriteLine(rngEntropy);
 
     var updatedRound= await repo.UpdateRoundEntropyAsync(round.Id,(decimal) rngEntropy.CrashPoint, rngEntropy.RngId, ct);
      
@@ -337,8 +357,6 @@ public sealed class RoundsService(
         StartsAt = round.StartTime,
         
     });
-    var currentRound = table.GetCurrentRoundSnapshot();
-
     await SendNewRoundCreated(table, ct);
      return updatedRound;
 
